@@ -16,9 +16,9 @@ AppId={{8F2A5B4C-7E1D-4A9F-B6C3-D5E8F2A4B1C9}
 AppName=zombadwin
 AppVersion={#AppVersion}
 AppPublisher=zombadwin contributors
-AppPublisherURL=https://github.com/
-AppSupportURL=https://github.com/
-AppUpdatesURL=https://github.com/
+AppPublisherURL=https://github.com/faroke/zombadwin
+AppSupportURL=https://github.com/faroke/zombadwin/issues
+AppUpdatesURL=https://github.com/faroke/zombadwin/releases
 DefaultDirName={autopf64}\zombadwin
 DefaultGroupName=zombadwin
 DisableProgramGroupPage=yes
@@ -110,4 +110,34 @@ begin
   // No custom pages for v1 — keep the installer minimal. If we want to ask
   // for the PZ user data directory here later, this is where the input page
   // is wired up via CreateInputDirPage.
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+var
+  ResultCode: Integer;
+  PrevNssm: String;
+begin
+  // Upgrade path: an earlier version is detected by the stable AppId. The
+  // service registered by that version holds open file handles on node.exe
+  // and the bundled node_modules under {app}\runtime and {app}\backend, so
+  // Inno Setup can't overwrite them while it's running. Stop and de-register
+  // the service before files are copied; [Run] below freshly re-creates it.
+  // No-op on a clean install (sc.exe will just print "service does not exist"
+  // and we ignore the exit code).
+  Exec('sc.exe', 'stop zombadwin', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(1500);
+  PrevNssm := ExpandConstant('{app}\nssm\nssm.exe');
+  if FileExists(PrevNssm) then begin
+    Exec(PrevNssm, 'remove zombadwin confirm', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end else begin
+    Exec('sc.exe', 'delete zombadwin', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  end;
+
+  // Also stop any previously-launched tray belonging to our install so the
+  // tray\node.exe is unlocked. Filtering on the command-line keeps unrelated
+  // node processes alive.
+  Exec('wmic.exe', 'process where "CommandLine like ''%zombadwin%tray.mjs%''" call terminate', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(500);
+
+  Result := '';
 end;

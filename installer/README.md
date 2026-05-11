@@ -79,6 +79,20 @@ The output `.exe` is a standard Inno Setup installer:
 
 A future installer iteration could prompt for this path during install and prepopulate `config.json` — left as a TODO.
 
+## How updates work
+
+The setup `.exe` uses a stable `AppId` GUID, so when a user runs a newer build of `zombadwin-setup-vX.Y.Z.exe` on a machine that already has zombadwin installed, Inno Setup detects the existing install and **upgrades in place** (same install location, same shortcuts, same service registration).
+
+Before copying files, the installer's `PrepareToInstall` hook:
+
+1. `sc stop zombadwin` (releases file locks on `node.exe` and the bundled `node_modules`)
+2. `nssm remove zombadwin confirm` (cleans up the previous service registration so the `[Run]` section can register the new one fresh)
+3. Kills any running tray process from the old install via `wmic ... CommandLine like '%zombadwin%tray.mjs%'`
+
+After files are replaced, the `[Run]` section re-registers and starts the service. The user's persistent state (`C:\ProgramData\zombadwin\` — config.json, bearer token, profiles, backups) lives outside `{app}` and is preserved across upgrades by design.
+
+**What's not built in:** there's no auto-updater that pings GitHub for new releases and downloads them in the background. The `AppUpdatesURL` metadata pointed at the GitHub Releases page only shows up as a link in Windows "Add or Remove Programs" — the user still has to click it, download the new `.exe`, and run it. For a self-hosted admin tool that's the conventional flow; building an auto-updater is a separate project (Squirrel, NetSparkle, or a custom check against the GitHub Releases API).
+
 ## Releasing through GitHub Actions
 
 `.github/workflows/release-installer.yml` runs `installer\build.ps1` on a `windows-latest` runner. Two triggers:
