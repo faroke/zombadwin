@@ -208,8 +208,28 @@ export class InstallService extends EventEmitter {
       'validate',
       '+quit',
     ];
-    this.pushSys(`running: ${steamcmdExe} ${args.join(' ')}`);
-    await this.runChild(steamcmdExe, args, (line) => this.parseProgress(line));
+    const attempt = async (n: number): Promise<void> => {
+      this.pushSys(`running SteamCMD (attempt ${n}): ${steamcmdExe} ${args.join(' ')}`);
+      await this.runChild(steamcmdExe, args, (line) => this.parseProgress(line));
+    };
+    try {
+      await attempt(1);
+    } catch (err) {
+      // If the user clicked Cancel, surface the original error directly.
+      if (this.state === 'cancelled') throw err;
+      // On a brand-new SteamCMD checkout, the first run always self-updates and
+      // populates the Steam package cache before it can resolve an app id. Valve
+      // ships the client this way; the first run typically prints
+      // "ERROR! Failed to install app 'X' (Missing configuration)" and exits
+      // non-zero even though everything is actually fine — the next run works.
+      // Retry once after a short pause so file handles fully release.
+      this.pushSys(
+        `attempt 1 failed (${(err as Error).message}). SteamCMD just self-updated ` +
+          `and populated its package cache; retrying once.`,
+      );
+      await new Promise((r) => setTimeout(r, 2000));
+      await attempt(2);
+    }
   }
 
   private parseProgress(line: string): void {
