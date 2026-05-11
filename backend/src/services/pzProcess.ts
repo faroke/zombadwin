@@ -255,24 +255,49 @@ export class PzProcessService extends EventEmitter {
 
     this.setState('stopping');
     this.pushSys('graceful shutdown requested (sending "quit")');
-    this.proc.stdin.write('quit\n');
+    // Write the quit command then close stdin. PZ has already buffered "quit"
+    // and will process its clean shutdown; the EOF that follows lets the
+    // PAUSE at the end of StartServer64.bat return immediately instead of
+    // blocking cmd.exe forever waiting for a keypress that never comes.
+    try {
+      this.proc.stdin.write('quit\n');
+      this.proc.stdin.end();
+    } catch (err) {
+      this.pushSys(`stdin write failed: ${(err as Error).message}`);
+    }
 
     this.clearStopGrace();
     this.stopGraceTimer = setTimeout(() => {
       if (this.proc && this.state === 'stopping') {
-        this.pushSys(`grace period (${STOP_GRACE_MS}ms) elapsed — sending SIGTERM`);
-        this.proc.kill('SIGTERM');
-        // If still alive after 5s, escalate.
-        setTimeout(() => {
-          if (this.proc) {
-            this.pushSys('still alive — sending SIGKILL');
-            this.proc.kill('SIGKILL');
-          }
-        }, 5000);
+        this.pushSys(`grace period (${STOP_GRACE_MS}ms) elapsed — force-killing tree`);
+        this.forceKillTree();
       }
     }, STOP_GRACE_MS);
 
     return this.getStatus();
+  }
+
+  private forceKillTree(): void {
+    const proc = this.proc;
+    if (!proc?.pid) return;
+    if (platform() === 'win32') {
+      // proc.kill on Windows uses TerminateProcess on the spawned process
+      // (here cmd.exe) and does NOT walk the process tree. The java.exe
+      // child would be orphaned and keep the ports bound. taskkill /T does
+      // the right thing.
+      const killer = spawn('taskkill', ['/F', '/T', '/PID', String(proc.pid)], {
+        windowsHide: true,
+        stdio: 'ignore',
+      });
+      killer.on('error', (err) => {
+        this.pushSys(`taskkill failed: ${err.message}`);
+      });
+    } else {
+      proc.kill('SIGTERM');
+      setTimeout(() => {
+        if (this.proc) this.proc.kill('SIGKILL');
+      }, 5000);
+    }
   }
 
   async restart(): Promise<void> {
