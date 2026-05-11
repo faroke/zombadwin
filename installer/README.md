@@ -79,6 +79,26 @@ The output `.exe` is a standard Inno Setup installer:
 
 A future installer iteration could prompt for this path during install and prepopulate `config.json` — left as a TODO.
 
+## Releasing through GitHub Actions
+
+`.github/workflows/release-installer.yml` runs `installer\build.ps1` on a `windows-latest` runner. Two triggers:
+
+- **Push a tag** `v*` → builds the installer **and** attaches the `.exe` to a freshly-generated GitHub release for that tag (notes are auto-generated from commits since the previous tag).
+- **`workflow_dispatch`** in the Actions tab → builds the installer and uploads it as a workflow artifact, no release created. Useful for testing the build pipeline.
+
+The bundled Node + NSSM downloads land in `installer/cache/` on the runner and are cached across runs (keyed by a hash of `build.ps1`) so subsequent builds skip the 30+ MB of pulls.
+
+To cut a release:
+
+```bash
+# Update version in package.json (and let it flow into both workspaces if you do
+# that manually) -- the installer .exe filename comes from package.json's version.
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The workflow needs `contents: write` (already set in the YAML) for the release step. No personal token needed — the default `GITHUB_TOKEN` is enough.
+
 ## Troubleshooting
 
 | Symptom | Likely cause |

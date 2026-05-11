@@ -1,0 +1,38 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck + build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install workspace dependencies
+        run: npm ci
+
+      - name: Typecheck (backend + frontend)
+        run: npm run typecheck
+
+      - name: Build (backend + frontend)
+        run: npm run build
+
+      - name: Verify frontend bundle exists
+        run: |
+          test -f frontend/dist/index.html
+          test -d frontend/dist/assets
+          test -f backend/dist/server.js

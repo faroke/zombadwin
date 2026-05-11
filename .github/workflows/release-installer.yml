@@ -1,0 +1,77 @@
+name: Build Windows installer
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Git ref to build from (default: current ref)'
+        required: false
+        default: ''
+
+permissions:
+  contents: write  # required to attach the .exe to a GitHub release
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      # Inno Setup 6 is what compiles the .iss into the setup .exe. Chocolatey
+      # ships a "innosetup" package that drops iscc.exe into the default
+      # C:\Program Files (x86)\Inno Setup 6\ path, which build.ps1 detects.
+      - name: Install Inno Setup 6
+        run: choco install innosetup --no-progress -y
+
+      # build.ps1 caches the Node Windows runtime and NSSM under installer\cache.
+      # Keying on the build script lets us bust the cache when bundled versions
+      # change without having to think about it.
+      - name: Cache installer downloads
+        uses: actions/cache@v4
+        with:
+          path: installer/cache
+          key: installer-cache-v1-${{ hashFiles('installer/build.ps1') }}
+
+      - name: Build installer
+        shell: pwsh
+        run: .\installer\build.ps1
+
+      - name: Locate setup .exe
+        id: find
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem dist/installer -Filter '*.exe' | Select-Object -First 1
+          if (-not $exe) { throw "no .exe produced under dist/installer" }
+          $size = '{0:N1} MB' -f ($exe.Length / 1MB)
+          Write-Host "    artifact : $($exe.FullName) ($size)"
+          "path=$($exe.FullName)" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          "name=$($exe.Name)"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Upload as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: zombadwin-installer
+          path: ${{ steps.find.outputs.path }}
+          if-no-files-found: error
+
+      # Only attach to a release when this run was triggered by a tag push.
+      # Manual workflow_dispatch runs still publish the artifact above.
+      - name: Attach to GitHub release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: ${{ steps.find.outputs.path }}
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
