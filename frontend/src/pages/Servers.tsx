@@ -12,7 +12,7 @@ import { useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { api, ApiError } from '@/lib/api';
+import { api, apiErrorMessage } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface ProfileSummary {
@@ -66,7 +66,7 @@ export function Servers(): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['profiles'] });
     },
     onError: (err: Error) =>
-      notify(false, err instanceof ApiError ? `Create failed (${err.status})` : err.message),
+      notify(false, apiErrorMessage(err, 'Create failed')),
   });
 
   const importProfile = useMutation({
@@ -77,7 +77,7 @@ export function Servers(): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['profiles'] });
     },
     onError: (err: Error) =>
-      notify(false, err instanceof ApiError ? `Import failed (${err.status})` : err.message),
+      notify(false, apiErrorMessage(err, 'Import failed')),
   });
 
   const setActive = useMutation({
@@ -94,7 +94,7 @@ export function Servers(): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['saves'] });
     },
     onError: (err: Error) =>
-      notify(false, err instanceof ApiError ? `Switch failed (${err.status})` : err.message),
+      notify(false, apiErrorMessage(err, 'Switch failed')),
   });
 
   const remove = useMutation({
@@ -104,7 +104,7 @@ export function Servers(): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['profiles'] });
     },
     onError: (err: Error) =>
-      notify(false, err instanceof ApiError ? `Delete failed (${err.status})` : err.message),
+      notify(false, apiErrorMessage(err, 'Delete failed')),
   });
 
   const rename = useMutation({
@@ -119,7 +119,7 @@ export function Servers(): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['profiles'] });
     },
     onError: (err: Error) =>
-      notify(false, err instanceof ApiError ? `Rename failed (${err.status})` : err.message),
+      notify(false, apiErrorMessage(err, 'Rename failed')),
   });
 
   const isRunning = status.data?.state !== 'stopped';

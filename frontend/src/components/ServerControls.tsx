@@ -2,25 +2,11 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { AlertCircle, Play, RotateCw, Square } from 'lucide-react';
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { api, ApiError } from '@/lib/api';
+import { api, apiErrorMessage } from '@/lib/api';
 import type { ServerState, StatusSnapshot } from '@/lib/ws';
 
 interface ServerControlsProps {
   state: ServerState;
-}
-
-interface ApiErrorBody {
-  error?: string;
-  message?: string;
-}
-
-function extractMessage(err: Error): string {
-  if (err instanceof ApiError) {
-    const body = err.body as ApiErrorBody | undefined;
-    if (body?.message) return body.message;
-    return `HTTP ${err.status}`;
-  }
-  return err.message;
 }
 
 export function ServerControls({ state }: ServerControlsProps): JSX.Element {
@@ -39,7 +25,7 @@ export function ServerControls({ state }: ServerControlsProps): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['server-status'] });
     },
     onError: (err: Error) => {
-      setLastError(extractMessage(err));
+      setLastError(apiErrorMessage(err));
       clearAfter(15_000);
     },
   });
@@ -50,7 +36,7 @@ export function ServerControls({ state }: ServerControlsProps): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['server-status'] });
     },
     onError: (err: Error) => {
-      setLastError(extractMessage(err));
+      setLastError(apiErrorMessage(err));
       clearAfter(15_000);
     },
   });
@@ -61,7 +47,7 @@ export function ServerControls({ state }: ServerControlsProps): JSX.Element {
       void qc.invalidateQueries({ queryKey: ['server-status'] });
     },
     onError: (err: Error) => {
-      setLastError(extractMessage(err));
+      setLastError(apiErrorMessage(err));
       clearAfter(15_000);
     },
   });

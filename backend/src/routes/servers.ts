@@ -13,12 +13,16 @@ import { defaultUserDir } from '../services/paths.js';
 import { getPzProcess } from '../services/pzProcess.js';
 import { loadConfig } from '../config.js';
 
+const NAME_PATTERN = /^[A-Za-z0-9_-]+$/;
+const NAME_ERROR =
+  'Profile name must be 1-32 characters: letters, digits, underscore or hyphen only (no spaces, accents, dots).';
+
 const NameBody = z.object({
-  name: z.string().min(1).max(32).regex(/^[A-Za-z0-9_-]+$/),
+  name: z.string().min(1, NAME_ERROR).max(32, NAME_ERROR).regex(NAME_PATTERN, NAME_ERROR),
 });
 
 const RenameBody = z.object({
-  newName: z.string().min(1).max(32).regex(/^[A-Za-z0-9_-]+$/),
+  newName: z.string().min(1, NAME_ERROR).max(32, NAME_ERROR).regex(NAME_PATTERN, NAME_ERROR),
 });
 
 function isRunning(): boolean {
