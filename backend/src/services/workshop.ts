@@ -10,10 +10,25 @@ export interface WorkshopMetadata {
   timeUpdated: number | null;
   /** File size in bytes, if available */
   fileSize: number | null;
+  /** True when Steam tagged this published file as a collection (file_type === 2) */
+  isCollection: boolean;
+}
+
+export interface ResolvedWorkshopInput {
+  /** All importable items. For a single mod URL this has length 1. For a
+   *  collection URL this has one entry per child mod (nested collections are
+   *  skipped — Steam allows them but PZ does not load collections directly). */
+  items: WorkshopMetadata[];
+  /** Set when the user pasted a collection URL — gives the UI a label and an
+   *  identifier to display. The collection itself is NOT added to
+   *  WorkshopItems because PZ wouldn't know what to do with it. */
+  parentCollection: { workshopId: string; title: string } | null;
 }
 
 const STEAM_DETAILS_URL =
   'https://api.steampowered.com/ISteamRemoteStorage/GetPublishedFileDetails/v1/';
+const STEAM_COLLECTIONS_URL =
+  'https://api.steampowered.com/ISteamRemoteStorage/GetCollectionDetails/v1/';
 
 /**
  * Accepts either a bare numeric ID or any of the steamcommunity URLs:
@@ -37,37 +52,96 @@ export function normalizeWorkshopInput(input: string): string | null {
 }
 
 export async function fetchWorkshopMetadata(workshopId: string): Promise<WorkshopMetadata> {
+  const [meta] = await fetchManyWorkshopMetadata([workshopId]);
+  if (!meta) throw new Error('Workshop item not found in response');
+  return meta;
+}
+
+/** Batch variant — Steam's API accepts up to ~50 IDs per call. */
+export async function fetchManyWorkshopMetadata(ids: string[]): Promise<WorkshopMetadata[]> {
+  if (ids.length === 0) return [];
   const body = new URLSearchParams();
-  body.set('itemcount', '1');
-  body.set('publishedfileids[0]', workshopId);
+  body.set('itemcount', String(ids.length));
+  ids.forEach((id, i) => body.set(`publishedfileids[${i}]`, id));
   const res = await fetch(STEAM_DETAILS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: body.toString(),
   });
-  if (!res.ok) {
-    throw new Error(`Steam Workshop API returned HTTP ${res.status}`);
-  }
+  if (!res.ok) throw new Error(`Steam Workshop API returned HTTP ${res.status}`);
   const json = (await res.json()) as SteamDetailsResponse;
-  const item = json?.response?.publishedfiledetails?.[0];
-  if (!item) throw new Error('Workshop item not found in response');
-  if (item.result !== 1) {
-    throw new Error(`Steam returned result=${item.result} (item probably missing or hidden)`);
+  const out: WorkshopMetadata[] = [];
+  for (const item of json?.response?.publishedfiledetails ?? []) {
+    if (item.result !== 1 || !item.publishedfileid) continue;
+    const description = item.description ?? '';
+    out.push({
+      workshopId: item.publishedfileid,
+      title: item.title || '(untitled)',
+      description,
+      detectedModIds: extractModIds(description),
+      detectedMapFolders: extractMapFolders(description),
+      timeUpdated: typeof item.time_updated === 'number' ? item.time_updated : null,
+      fileSize:
+        typeof item.file_size === 'number'
+          ? item.file_size
+          : typeof item.file_size === 'string'
+            ? Number(item.file_size)
+            : null,
+      isCollection: item.file_type === 2,
+    });
   }
-  const description = item.description ?? '';
+  return out;
+}
+
+/** Returns the IDs of every mod-typed child of a Steam Workshop collection. */
+export async function fetchCollectionChildren(collectionId: string): Promise<string[]> {
+  const body = new URLSearchParams();
+  body.set('collectioncount', '1');
+  body.set('publishedfileids[0]', collectionId);
+  const res = await fetch(STEAM_COLLECTIONS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: body.toString(),
+  });
+  if (!res.ok) throw new Error(`Steam Collection API returned HTTP ${res.status}`);
+  const json = (await res.json()) as SteamCollectionResponse;
+  const details = json?.response?.collectiondetails?.[0];
+  if (!details) throw new Error('Collection not found in response');
+  if (details.result !== 1) {
+    throw new Error(`Steam returned result=${details.result} for collection ${collectionId}`);
+  }
+  // file_type 0 = community file (mod). Skip nested collections (file_type 2)
+  // and asset types we don't care about (screenshots, videos, …).
+  return (details.children ?? [])
+    .filter((c) => c.filetype === 0)
+    .sort((a, b) => (a.sortorder ?? 0) - (b.sortorder ?? 0))
+    .map((c) => c.publishedfileid);
+}
+
+/**
+ * Resolves user input (workshop URL or numeric ID) into a list of importable
+ * mods. Handles both single-mod URLs and collection URLs transparently.
+ */
+export async function resolveWorkshopInput(input: string): Promise<ResolvedWorkshopInput> {
+  const id = normalizeWorkshopInput(input);
+  if (!id) throw new Error('No numeric ID detected in the input.');
+
+  const primary = await fetchWorkshopMetadata(id);
+  if (!primary.isCollection) {
+    return { items: [primary], parentCollection: null };
+  }
+
+  const childIds = await fetchCollectionChildren(id);
+  if (childIds.length === 0) {
+    return {
+      items: [],
+      parentCollection: { workshopId: id, title: primary.title },
+    };
+  }
+  const items = await fetchManyWorkshopMetadata(childIds);
   return {
-    workshopId,
-    title: item.title || '(untitled)',
-    description,
-    detectedModIds: extractModIds(description),
-    detectedMapFolders: extractMapFolders(description),
-    timeUpdated: typeof item.time_updated === 'number' ? item.time_updated : null,
-    fileSize:
-      typeof item.file_size === 'number'
-        ? item.file_size
-        : typeof item.file_size === 'string'
-          ? Number(item.file_size)
-          : null,
+    items,
+    parentCollection: { workshopId: id, title: primary.title },
   };
 }
 
@@ -98,6 +172,21 @@ interface SteamDetailsResponse {
       description?: string;
       time_updated?: number;
       file_size?: number | string;
+      file_type?: number;
+    }>;
+  };
+}
+
+interface SteamCollectionResponse {
+  response?: {
+    collectiondetails?: Array<{
+      publishedfileid?: string;
+      result?: number;
+      children?: Array<{
+        publishedfileid: string;
+        sortorder?: number;
+        filetype?: number;
+      }>;
     }>;
   };
 }

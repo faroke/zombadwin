@@ -33,11 +33,19 @@ interface WorkshopMetadata {
   detectedMapFolders: string[];
   timeUpdated: number | null;
   fileSize: number | null;
+  isCollection: boolean;
 }
 
 interface ResolveResponse {
   ok: true;
-  metadata: WorkshopMetadata;
+  items: WorkshopMetadata[];
+  parentCollection: { workshopId: string; title: string } | null;
+}
+
+interface PendingAdd {
+  meta: WorkshopMetadata;
+  modIds: string[];
+  maps: string[];
 }
 
 export function Mods(): JSX.Element {
@@ -107,30 +115,44 @@ export function Mods(): JSX.Element {
     setFeedback(null);
   }
 
-  function addWorkshopItem(meta: WorkshopMetadata, chosenModIds: string[], chosenMaps: string[]): void {
-    if (workshopItems.includes(meta.workshopId)) {
-      notify(false, `Workshop ${meta.workshopId} already in list.`);
-      return;
-    }
-    setWorkshopItems((w) => [...w, meta.workshopId]);
-    setMods((m) => {
-      const next = [...m];
-      for (const id of chosenModIds) if (!next.includes(id)) next.push(id);
-      return next;
-    });
-    setMap((mp) => {
-      const next = [...mp];
-      // Make sure the base map stays at the bottom — insert maps just before it if present.
-      const baseIdx = next.length > 0 ? next.length - 1 : -1;
-      for (const m of chosenMaps) {
-        if (next.includes(m)) continue;
-        if (baseIdx === -1) next.push(m);
-        else next.splice(baseIdx, 0, m);
+  function addWorkshopItems(pending: PendingAdd[]): void {
+    if (pending.length === 0) return;
+    const nextWs = [...workshopItems];
+    const nextMods = [...mods];
+    const nextMap = [...map];
+    const cacheAdd: Record<string, WorkshopMetadata> = {};
+    const skipped: string[] = [];
+
+    for (const { meta, modIds, maps } of pending) {
+      if (nextWs.includes(meta.workshopId)) {
+        skipped.push(meta.title || meta.workshopId);
+        continue;
       }
-      return next;
-    });
-    setMetadataCache((c) => ({ ...c, [meta.workshopId]: meta }));
-    notify(true, `Added ${meta.title}.`);
+      nextWs.push(meta.workshopId);
+      for (const id of modIds) if (!nextMods.includes(id)) nextMods.push(id);
+      // Keep the base map (e.g. Muldraugh, KY) at the bottom of the load order.
+      const baseIdx = nextMap.length > 0 ? nextMap.length - 1 : -1;
+      for (const m of maps) {
+        if (nextMap.includes(m)) continue;
+        if (baseIdx === -1) nextMap.push(m);
+        else nextMap.splice(baseIdx, 0, m);
+      }
+      cacheAdd[meta.workshopId] = meta;
+    }
+
+    setWorkshopItems(nextWs);
+    setMods(nextMods);
+    setMap(nextMap);
+    setMetadataCache((c) => ({ ...c, ...cacheAdd }));
+
+    const added = pending.length - skipped.length;
+    if (added > 0 && skipped.length > 0) {
+      notify(true, `Added ${added}; skipped ${skipped.length} already present.`);
+    } else if (added > 0) {
+      notify(true, added === 1 ? `Added ${pending[0]?.meta.title ?? ''}` : `Added ${added} mods.`);
+    } else if (skipped.length > 0) {
+      notify(false, `All ${skipped.length} already in the list.`);
+    }
   }
 
   function moveItem<T>(list: T[], idx: number, dir: -1 | 1): T[] {
@@ -214,7 +236,7 @@ export function Mods(): JSX.Element {
           run: (i) => resolve.mutateAsync(i),
           isPending: resolve.isPending,
         }}
-        onAdd={addWorkshopItem}
+        onAdd={addWorkshopItems}
       />
 
       <Card>
@@ -382,47 +404,114 @@ function AddModForm({
   onAdd,
 }: {
   resolveState: { run: (input: string) => Promise<ResolveResponse>; isPending: boolean };
-  onAdd: (meta: WorkshopMetadata, chosenModIds: string[], chosenMaps: string[]) => void;
+  onAdd: (pending: PendingAdd[]) => void;
 }): JSX.Element {
   const [input, setInput] = useState('');
-  const [metadata, setMetadata] = useState<WorkshopMetadata | null>(null);
+  const [resolved, setResolved] = useState<ResolveResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [chosenModIds, setChosenModIds] = useState<string[]>([]);
-  const [chosenMaps, setChosenMaps] = useState<string[]>([]);
-  const [extraModInput, setExtraModInput] = useState('');
+  // Per-item user selection: included + chosen mod IDs + chosen maps + extra mods.
+  // Keyed by workshopId.
+  const [selection, setSelection] = useState<
+    Record<string, { included: boolean; modIds: string[]; maps: string[] }>
+  >({});
+  const [extraModInputs, setExtraModInputs] = useState<Record<string, string>>({});
+
+  function reset(): void {
+    setResolved(null);
+    setSelection({});
+    setExtraModInputs({});
+    setInput('');
+  }
 
   async function doResolve(e: React.FormEvent): Promise<void> {
     e.preventDefault();
     setError(null);
     try {
       const res = await resolveState.run(input.trim());
-      setMetadata(res.metadata);
-      setChosenModIds(res.metadata.detectedModIds);
-      setChosenMaps(res.metadata.detectedMapFolders);
-      setExtraModInput('');
+      setResolved(res);
+      const next: Record<string, { included: boolean; modIds: string[]; maps: string[] }> = {};
+      for (const item of res.items) {
+        next[item.workshopId] = {
+          included: true,
+          modIds: [...item.detectedModIds],
+          maps: [...item.detectedMapFolders],
+        };
+      }
+      setSelection(next);
+      setExtraModInputs({});
     } catch (err) {
-      setMetadata(null);
+      setResolved(null);
       setError(err instanceof ApiError ? `Resolve failed (${err.status})` : (err as Error).message);
     }
   }
 
-  function toggleModId(id: string): void {
-    setChosenModIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]));
+  function toggleInclude(id: string): void {
+    setSelection((s) => ({ ...s, [id]: { ...s[id]!, included: !s[id]?.included } }));
   }
-  function toggleMap(name: string): void {
-    setChosenMaps((m) => (m.includes(name) ? m.filter((x) => x !== name) : [...m, name]));
+  function toggleModId(itemId: string, modId: string): void {
+    setSelection((s) => {
+      const cur = s[itemId]!;
+      const has = cur.modIds.includes(modId);
+      return {
+        ...s,
+        [itemId]: {
+          ...cur,
+          modIds: has ? cur.modIds.filter((x) => x !== modId) : [...cur.modIds, modId],
+        },
+      };
+    });
   }
+  function toggleMap(itemId: string, mapName: string): void {
+    setSelection((s) => {
+      const cur = s[itemId]!;
+      const has = cur.maps.includes(mapName);
+      return {
+        ...s,
+        [itemId]: {
+          ...cur,
+          maps: has ? cur.maps.filter((x) => x !== mapName) : [...cur.maps, mapName],
+        },
+      };
+    });
+  }
+  function appendExtraMod(itemId: string): void {
+    const v = (extraModInputs[itemId] ?? '').trim();
+    if (!v) return;
+    setSelection((s) => {
+      const cur = s[itemId]!;
+      if (cur.modIds.includes(v)) return s;
+      return { ...s, [itemId]: { ...cur, modIds: [...cur.modIds, v] } };
+    });
+    setExtraModInputs((e) => ({ ...e, [itemId]: '' }));
+  }
+
+  function commit(): void {
+    if (!resolved) return;
+    const pending: PendingAdd[] = [];
+    for (const item of resolved.items) {
+      const sel = selection[item.workshopId];
+      if (!sel?.included) continue;
+      pending.push({ meta: item, modIds: sel.modIds, maps: sel.maps });
+    }
+    onAdd(pending);
+    reset();
+  }
+
+  const isCollection = resolved?.parentCollection != null;
+  const includedCount = resolved
+    ? resolved.items.filter((i) => selection[i.workshopId]?.included).length
+    : 0;
 
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-base">
           <Plus className="h-4 w-4" />
-          Add a Workshop mod
+          Add a Workshop mod or collection
         </CardTitle>
         <CardDescription>
-          Paste a Workshop URL or numeric ID. We&apos;ll fetch its title and try to extract the mod
-          / map IDs from the description — you can adjust the picks before adding.
+          Paste a Workshop URL or numeric ID. Single mods and Workshop collections are both
+          accepted — collections expand into all their mods so you can pick which ones to add.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -443,103 +532,188 @@ function AddModForm({
           </Button>
         </form>
         {error && <p className="text-sm text-destructive">{error}</p>}
-        {metadata && (
+
+        {resolved && (
           <div className="space-y-3 rounded-md border border-border bg-card p-3">
-            <div>
-              <div className="text-sm font-medium">{metadata.title}</div>
-              <div className="font-mono text-xs text-muted-foreground">
-                ID {metadata.workshopId}
-                {metadata.fileSize ? ` · ${(metadata.fileSize / 1024 / 1024).toFixed(1)} MB` : ''}
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-1 text-xs font-medium text-muted-foreground">
-                Detected mod IDs (toggle to include)
-              </div>
-              {metadata.detectedModIds.length === 0 ? (
-                <p className="text-xs text-muted-foreground">
-                  None detected. Add them manually below or in the Loaded mods section.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-1">
-                  {metadata.detectedModIds.map((id) => (
-                    <button
-                      key={id}
-                      type="button"
-                      onClick={() => toggleModId(id)}
-                      className={cn(
-                        'rounded-md border px-2 py-0.5 font-mono text-xs',
-                        chosenModIds.includes(id)
-                          ? 'border-primary bg-primary/15 text-primary'
-                          : 'border-input text-muted-foreground hover:text-foreground',
-                      )}
-                    >
-                      {id}
-                    </button>
-                  ))}
+            {isCollection && resolved.parentCollection && (
+              <div className="rounded border border-primary/40 bg-primary/10 p-2 text-sm">
+                <div className="font-medium">
+                  Collection: {resolved.parentCollection.title}
                 </div>
-              )}
-              <div className="mt-2 flex items-center gap-2">
-                <Input
-                  value={extraModInput}
-                  onChange={(e) => setExtraModInput(e.target.value)}
-                  placeholder="Additional mod folder ID"
-                  className="font-mono"
-                />
-                <Button
-                  type="button"
-                  variant="outline"
-                  disabled={!extraModInput.trim()}
-                  onClick={() => {
-                    const v = extraModInput.trim();
-                    if (v && !chosenModIds.includes(v)) setChosenModIds((ids) => [...ids, v]);
-                    setExtraModInput('');
-                  }}
-                >
-                  Add
-                </Button>
-              </div>
-            </div>
-
-            {metadata.detectedMapFolders.length > 0 && (
-              <div>
-                <div className="mb-1 text-xs font-medium text-muted-foreground">
-                  Detected map folders (toggle to include)
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {metadata.detectedMapFolders.map((m) => (
-                    <button
-                      key={m}
-                      type="button"
-                      onClick={() => toggleMap(m)}
-                      className={cn(
-                        'rounded-md border px-2 py-0.5 font-mono text-xs',
-                        chosenMaps.includes(m)
-                          ? 'border-primary bg-primary/15 text-primary'
-                          : 'border-input text-muted-foreground hover:text-foreground',
-                      )}
-                    >
-                      {m}
-                    </button>
-                  ))}
+                <div className="font-mono text-xs text-muted-foreground">
+                  ID {resolved.parentCollection.workshopId} · {resolved.items.length} mod
+                  {resolved.items.length > 1 ? 's' : ''} inside
                 </div>
               </div>
             )}
 
-            <Button
-              onClick={() => {
-                onAdd(metadata, chosenModIds, chosenMaps);
-                setMetadata(null);
-                setInput('');
-              }}
-            >
-              <Plus className="mr-2 h-4 w-4" />
-              Add to server
-            </Button>
+            {resolved.items.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                {isCollection
+                  ? 'This collection has no mod-type items (only screenshots/videos/nested collections).'
+                  : 'No items resolved.'}
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {resolved.items.map((item) => {
+                  const sel = selection[item.workshopId];
+                  if (!sel) return null;
+                  return (
+                    <ResolvedItemRow
+                      key={item.workshopId}
+                      item={item}
+                      sel={sel}
+                      extraInput={extraModInputs[item.workshopId] ?? ''}
+                      onExtraInputChange={(v) =>
+                        setExtraModInputs((e) => ({ ...e, [item.workshopId]: v }))
+                      }
+                      onCommitExtra={() => appendExtraMod(item.workshopId)}
+                      onToggleInclude={() => toggleInclude(item.workshopId)}
+                      onToggleModId={(mid) => toggleModId(item.workshopId, mid)}
+                      onToggleMap={(m) => toggleMap(item.workshopId, m)}
+                      showIncludeToggle={isCollection}
+                    />
+                  );
+                })}
+              </div>
+            )}
+
+            {resolved.items.length > 0 && (
+              <Button onClick={commit} disabled={includedCount === 0}>
+                <Plus className="mr-2 h-4 w-4" />
+                {isCollection
+                  ? `Add ${includedCount} selected mod${includedCount > 1 ? 's' : ''} to server`
+                  : 'Add to server'}
+              </Button>
+            )}
           </div>
         )}
       </CardContent>
     </Card>
+  );
+}
+
+function ResolvedItemRow({
+  item,
+  sel,
+  extraInput,
+  onExtraInputChange,
+  onCommitExtra,
+  onToggleInclude,
+  onToggleModId,
+  onToggleMap,
+  showIncludeToggle,
+}: {
+  item: WorkshopMetadata;
+  sel: { included: boolean; modIds: string[]; maps: string[] };
+  extraInput: string;
+  onExtraInputChange: (v: string) => void;
+  onCommitExtra: () => void;
+  onToggleInclude: () => void;
+  onToggleModId: (id: string) => void;
+  onToggleMap: (name: string) => void;
+  showIncludeToggle: boolean;
+}): JSX.Element {
+  return (
+    <div
+      className={cn(
+        'rounded border bg-card p-3 text-sm',
+        showIncludeToggle && !sel.included && 'opacity-50',
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 flex-1">
+          <div className="font-medium">{item.title}</div>
+          <div className="font-mono text-xs text-muted-foreground">
+            ID {item.workshopId}
+            {item.fileSize ? ` · ${(item.fileSize / 1024 / 1024).toFixed(1)} MB` : ''}
+          </div>
+        </div>
+        {showIncludeToggle && (
+          <label className="inline-flex items-center gap-1 text-xs">
+            <input
+              type="checkbox"
+              checked={sel.included}
+              onChange={onToggleInclude}
+              className="h-4 w-4 rounded border-input accent-primary"
+            />
+            Include
+          </label>
+        )}
+      </div>
+
+      <div className="mt-2 space-y-2">
+        <div>
+          <div className="mb-1 text-xs font-medium text-muted-foreground">
+            Detected mod IDs ({item.detectedModIds.length})
+          </div>
+          {item.detectedModIds.length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              None detected — add manually below.
+            </p>
+          ) : (
+            <div className="flex flex-wrap gap-1">
+              {item.detectedModIds.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  onClick={() => onToggleModId(id)}
+                  className={cn(
+                    'rounded-md border px-2 py-0.5 font-mono text-xs',
+                    sel.modIds.includes(id)
+                      ? 'border-primary bg-primary/15 text-primary'
+                      : 'border-input text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {id}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="mt-1 flex items-center gap-1">
+            <Input
+              value={extraInput}
+              onChange={(e) => onExtraInputChange(e.target.value)}
+              placeholder="Additional mod folder ID"
+              className="h-7 font-mono text-xs"
+            />
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              disabled={!extraInput.trim()}
+              onClick={onCommitExtra}
+            >
+              Add
+            </Button>
+          </div>
+        </div>
+
+        {item.detectedMapFolders.length > 0 && (
+          <div>
+            <div className="mb-1 text-xs font-medium text-muted-foreground">
+              Detected map folders
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {item.detectedMapFolders.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => onToggleMap(m)}
+                  className={cn(
+                    'rounded-md border px-2 py-0.5 font-mono text-xs',
+                    sel.maps.includes(m)
+                      ? 'border-primary bg-primary/15 text-primary'
+                      : 'border-input text-muted-foreground hover:text-foreground',
+                  )}
+                >
+                  {m}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }

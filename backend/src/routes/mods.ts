@@ -6,9 +6,8 @@ import { defaultUserDir } from '../services/paths.js';
 import { getActiveServerName } from '../services/profiles.js';
 import { readIniFile, serverIniPath, writeIniFile } from '../services/iniFile.js';
 import {
-  fetchWorkshopMetadata,
   joinList,
-  normalizeWorkshopInput,
+  resolveWorkshopInput,
   splitList,
 } from '../services/workshop.js';
 
@@ -57,14 +56,9 @@ export async function registerModRoutes(app: FastifyInstance): Promise<void> {
       reply.code(400);
       return { error: 'invalid_body', issues: parse.error.issues };
     }
-    const id = normalizeWorkshopInput(parse.data.input);
-    if (!id) {
-      reply.code(400);
-      return { error: 'invalid_workshop_id', message: 'No numeric ID detected in the input.' };
-    }
     try {
-      const metadata = await fetchWorkshopMetadata(id);
-      return { ok: true, metadata };
+      const resolved = await resolveWorkshopInput(parse.data.input);
+      return { ok: true, ...resolved };
     } catch (err) {
       reply.code(502);
       return { error: 'workshop_fetch_failed', message: (err as Error).message };
