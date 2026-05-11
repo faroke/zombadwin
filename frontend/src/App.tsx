@@ -1,13 +1,32 @@
 import { useState } from 'react';
+import { BrowserRouter, Navigate, Route, Routes } from 'react-router-dom';
+import { Layout } from '@/components/Layout';
+import { getToken } from '@/lib/auth';
+import { Console } from '@/pages/Console';
 import { Dashboard } from '@/pages/Dashboard';
 import { Login } from '@/pages/Login';
-import { getToken } from '@/lib/auth';
+import { Placeholder } from '@/pages/Placeholder';
 
 export function App(): JSX.Element {
   const [authed, setAuthed] = useState<boolean>(() => getToken() !== null);
-  return authed ? (
-    <Dashboard onLogout={() => setAuthed(false)} />
-  ) : (
-    <Login onAuthenticated={() => setAuthed(true)} />
+
+  if (!authed) {
+    return <Login onAuthenticated={() => setAuthed(true)} />;
+  }
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route element={<Layout onLogout={() => setAuthed(false)} />}>
+          <Route index element={<Dashboard />} />
+          <Route path="console" element={<Console />} />
+          <Route path="install" element={<Placeholder title="Install" milestone="SteamCMD wizard" />} />
+          <Route path="config" element={<Placeholder title="Config" milestone="INI + SandboxVars editor" />} />
+          <Route path="players" element={<Placeholder title="Players" milestone="kick/ban/admin/whitelist" />} />
+          <Route path="mods" element={<Placeholder title="Mods" milestone="Workshop manager" />} />
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
   );
 }
