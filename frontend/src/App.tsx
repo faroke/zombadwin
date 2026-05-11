@@ -9,6 +9,7 @@ import { Install } from '@/pages/Install';
 import { Login } from '@/pages/Login';
 import { Mods } from '@/pages/Mods';
 import { Players } from '@/pages/Players';
+import { Saves } from '@/pages/Saves';
 import { Servers } from '@/pages/Servers';
 
 export function App(): JSX.Element {
@@ -29,6 +30,7 @@ export function App(): JSX.Element {
           <Route path="servers" element={<Servers />} />
           <Route path="players" element={<Players />} />
           <Route path="mods" element={<Mods />} />
+          <Route path="saves" element={<Saves />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

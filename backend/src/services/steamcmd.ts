@@ -8,6 +8,15 @@ import { pipeline } from 'node:stream/promises';
 import { type AppConfig, persistConfig } from '../config.js';
 import { startScriptName } from './paths.js';
 
+function tarBinary(): string {
+  if (platform() === 'win32') {
+    const root = process.env.SystemRoot ?? process.env.WINDIR ?? 'C:\\Windows';
+    const candidate = join(root, 'System32', 'tar.exe');
+    if (existsSync(candidate)) return candidate;
+  }
+  return 'tar';
+}
+
 export type InstallState =
   | 'idle'
   | 'downloading'
@@ -193,7 +202,9 @@ export class InstallService extends EventEmitter {
     const archive = join(steamcmdDir, isWin ? 'steamcmd.zip' : 'steamcmd.tar.gz');
     this.pushSys(`extracting ${archive}`);
     // tar.exe is built into Windows 10 (1803+) and handles both .zip and .tar.gz.
-    await this.runChild('tar', ['-xf', archive, '-C', steamcmdDir]);
+    // On Windows, force System32\tar.exe (bsdtar) — a Node process launched from
+    // Git-Bash / MSYS picks up GNU tar first which rejects "C:\..." paths.
+    await this.runChild(tarBinary(), ['-xf', archive, '-C', steamcmdDir]);
     this.pushSys('extraction complete');
   }
 
