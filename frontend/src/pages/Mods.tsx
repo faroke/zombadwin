@@ -199,7 +199,7 @@ export function Mods(): JSX.Element {
         if (notDownloaded === res.entries.length && res.entries.length > 0) {
           notify(
             false,
-            'No Workshop content found on disk yet. Start the server once so PZ downloads the subscribed items.',
+            'No Workshop content on disk yet. Click "Download via SteamCMD" first to fetch the subscriptions, then re-Scan.',
           );
         } else {
           notify(true, 'Scan complete — nothing new to add, all mods already listed.');
@@ -207,7 +207,7 @@ export function Mods(): JSX.Element {
       } else {
         const skipMsg =
           notDownloaded > 0
-            ? ` (${notDownloaded} not downloaded yet — start the server first)`
+            ? ` (${notDownloaded} not downloaded yet — try "Download via SteamCMD")`
             : '';
         notify(true, `Scanned ${res.workshopRoot}: added ${parts.join(' and ')}${skipMsg}.`);
       }
