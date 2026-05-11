@@ -15,7 +15,10 @@ export async function registerLogsSocket(app: FastifyInstance, config: AppConfig
     // Browsers cannot send Authorization headers on the WebSocket handshake,
     // so we authenticate via a ?token=... query string parameter.
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
-    const token = url.searchParams.get('token');
+    // Trim to mirror the HTTP bearer-auth path, which already strips whitespace
+    // — otherwise a token copied with surrounding spaces breaks WS auth even
+    // though the same token works on /api/* requests.
+    const token = url.searchParams.get('token')?.trim();
     if (token !== config.authToken) {
       const err: Envelope = { type: 'error', message: 'unauthorized' };
       socket.send(JSON.stringify(err));

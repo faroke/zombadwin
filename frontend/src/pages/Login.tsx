@@ -16,19 +16,21 @@ export function Login({ onAuthenticated }: LoginProps): JSX.Element {
 
   async function submit(e: React.FormEvent): Promise<void> {
     e.preventDefault();
+    const cleanToken = token.trim();
+    if (!cleanToken) return;
     setBusy(true);
     setError(null);
     try {
       // Probe an authenticated route to validate the token before persisting it.
       const res = await fetch('/api/server/status', {
-        headers: { Authorization: `Bearer ${token}` },
+        headers: { Authorization: `Bearer ${cleanToken}` },
       });
       if (res.status === 401) {
         setError('Invalid token.');
         return;
       }
       // 404 or 200 both mean auth passed (route may not exist yet).
-      setToken(token);
+      setToken(cleanToken);
       onAuthenticated();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Network error');

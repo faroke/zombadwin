@@ -21,7 +21,9 @@ export async function registerInstallSocket(
 ): Promise<void> {
   app.get('/ws/install', { websocket: true }, (socket, req) => {
     const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);
-    if (url.searchParams.get('token') !== config.authToken) {
+    // See ws/logs.ts: trim mirrors the HTTP path so a token copied with
+    // surrounding whitespace doesn't silently fail only on WebSocket auth.
+    if (url.searchParams.get('token')?.trim() !== config.authToken) {
       socket.send(JSON.stringify({ type: 'error', message: 'unauthorized' } satisfies Envelope));
       socket.close(1008, 'unauthorized');
       return;
