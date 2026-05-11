@@ -11,21 +11,42 @@ import {
   type IniFile,
 } from '../services/iniFile.js';
 import { INI_CATEGORIES, INI_SCHEMA_DEDUPED } from '../services/iniSchema.js';
+import {
+  mergeSandbox,
+  readSandbox,
+  sandboxPath,
+  writeSandbox,
+  type SandboxRecord,
+  type SandboxValue,
+} from '../services/sandboxLua.js';
+import { SANDBOX_CATEGORIES, SANDBOX_SCHEMA } from '../services/sandboxSchema.js';
 
-const PutBody = z.object({
+const PutIniBody = z.object({
   values: z.record(z.string(), z.string()),
 });
 
-function currentIniPath(): { path: string; serverName: string } {
+const SandboxLeaf: z.ZodType<SandboxValue> = z.lazy(() =>
+  z.union([z.number(), z.boolean(), z.string(), z.record(z.string(), SandboxLeaf)]),
+);
+const PutSandboxBody = z.object({
+  values: z.record(z.string(), SandboxLeaf),
+});
+
+function currentServerName(): string {
+  return getPzProcess().getStatus().serverName || 'servertest';
+}
+
+function currentUserDir(): string {
   const cfg = loadConfig();
-  const userDir = cfg.pzUserDir ?? defaultUserDir();
-  const serverName = getPzProcess().getStatus().serverName || 'servertest';
-  return { path: serverIniPath(userDir, serverName), serverName };
+  return cfg.pzUserDir ?? defaultUserDir();
 }
 
 export async function registerConfigRoutes(app: FastifyInstance): Promise<void> {
+  // -- INI -----------------------------------------------------------------
   app.get('/api/config/ini', async (_req, reply) => {
-    const { path, serverName } = currentIniPath();
+    const userDir = currentUserDir();
+    const serverName = currentServerName();
+    const path = serverIniPath(userDir, serverName);
     if (!existsSync(path)) {
       reply.code(404);
       return {
@@ -49,23 +70,67 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
   });
 
   app.put('/api/config/ini', async (req, reply) => {
-    const parse = PutBody.safeParse(req.body);
+    const parse = PutIniBody.safeParse(req.body);
     if (!parse.success) {
       reply.code(400);
       return { error: 'invalid_body', issues: parse.error.issues };
     }
-    const { path } = currentIniPath();
+    const userDir = currentUserDir();
+    const path = serverIniPath(userDir, currentServerName());
     if (!existsSync(path)) {
       reply.code(404);
       return { error: 'ini_not_found', path };
     }
     const existing: IniFile = readIniFile(path);
-    // Merge: keep keys not provided in the request, overwrite the rest.
     for (const [k, v] of Object.entries(parse.data.values)) {
       if (!(k in existing.values)) existing.order.push(k);
       existing.values[k] = v;
     }
     writeIniFile(path, existing);
     return { ok: true, path, count: Object.keys(parse.data.values).length };
+  });
+
+  // -- Sandbox -------------------------------------------------------------
+  app.get('/api/config/sandbox', async (_req, reply) => {
+    const userDir = currentUserDir();
+    const serverName = currentServerName();
+    const path = sandboxPath(userDir, serverName);
+    if (!existsSync(path)) {
+      reply.code(404);
+      return {
+        error: 'sandbox_not_found',
+        message: `${path} does not exist. Start the server once to generate the default SandboxVars.`,
+        path,
+        serverName,
+        schema: SANDBOX_SCHEMA,
+        categories: SANDBOX_CATEGORIES,
+      };
+    }
+    const values = readSandbox(path);
+    return {
+      path,
+      serverName,
+      values,
+      schema: SANDBOX_SCHEMA,
+      categories: SANDBOX_CATEGORIES,
+    };
+  });
+
+  app.put('/api/config/sandbox', async (req, reply) => {
+    const parse = PutSandboxBody.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: 'invalid_body', issues: parse.error.issues };
+    }
+    const userDir = currentUserDir();
+    const path = sandboxPath(userDir, currentServerName());
+    if (!existsSync(path)) {
+      reply.code(404);
+      return { error: 'sandbox_not_found', path };
+    }
+    const existing = readSandbox(path);
+    const merged: SandboxRecord = mergeSandbox(existing, parse.data.values as SandboxRecord);
+    writeSandbox(path, merged);
+    return { ok: true, path };
   });
 }
