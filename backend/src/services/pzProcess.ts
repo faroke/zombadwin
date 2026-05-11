@@ -1,8 +1,11 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
+import { createSocket } from 'node:dgram';
 import { EventEmitter } from 'node:events';
+import { existsSync } from 'node:fs';
 import { platform } from 'node:os';
 import { type AppConfig, loadConfig } from '../config.js';
-import { resolveInstallDir, startScriptName } from './paths.js';
+import { readIniFile, serverIniPath } from './iniFile.js';
+import { defaultUserDir, resolveInstallDir, startScriptName } from './paths.js';
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
 
@@ -81,6 +84,29 @@ export class PzProcessService extends EventEmitter {
     return this.serverName;
   }
 
+  /**
+   * Reads DefaultPort / UDPPort from the active profile's INI when it exists,
+   * falling back to PZ's compiled-in defaults (16261 + 16262). We don't try
+   * to be clever about other ports the user may have configured manually in a
+   * profile that's not the active one.
+   */
+  private detectServerPorts(): number[] {
+    try {
+      const userDir = loadConfig().pzUserDir ?? defaultUserDir();
+      const iniPath = serverIniPath(userDir, this.serverName);
+      if (!existsSync(iniPath)) return [16261, 16262];
+      const ini = readIniFile(iniPath);
+      const game = Number(ini.values.DefaultPort);
+      const udp = Number(ini.values.UDPPort);
+      return [
+        Number.isFinite(game) && game > 0 ? game : 16261,
+        Number.isFinite(udp) && udp > 0 ? udp : 16262,
+      ];
+    } catch {
+      return [16261, 16262];
+    }
+  }
+
   /** True iff a process is currently up and using this server name. */
   isRunningAs(name: string): boolean {
     return this.proc !== null && this.serverName === name;
@@ -129,6 +155,27 @@ export class PzProcessService extends EventEmitter {
     // Pick up the active profile name from the persisted config, so switching
     // profiles via the API takes effect on the next start.
     this.serverName = loadConfig().activeServer || this.serverName;
+
+    // Pre-flight: fail fast when the UDP ports are already bound. PZ loads
+    // ~7 minutes of assets and Lua before it tries RakNet startup, so a
+    // RAKNET_STARTED=5 (SOCKET_PORT_ALREADY_IN_USE) error at the very end is
+    // an awful wait. This catches the common "previous instance is still
+    // alive (crashed/hung)" case immediately.
+    const ports = this.detectServerPorts();
+    for (const port of ports) {
+      const busyPid = await udpPortBusy(port);
+      if (busyPid !== null) {
+        const hint =
+          busyPid > 0
+            ? ` Process ID ${busyPid} is holding it (Task Manager → Details, or PowerShell: Stop-Process -Id ${busyPid} -Force).`
+            : ' Run `netstat -ano -p UDP | findstr :' + port + '` to find which PID is holding it.';
+        const msg =
+          `UDP port ${port} is already in use — another Project Zomboid server is probably ` +
+          `still running.${hint}`;
+        this.pushSys(msg);
+        throw new Error(msg);
+      }
+    }
 
     const spawnCfg = this.resolveSpawnConfig();
     this.setState('starting');
@@ -370,6 +417,61 @@ export function initPzProcess(config: AppConfig): PzProcessService {
 export function getPzProcess(): PzProcessService {
   if (!instance) throw new Error('PzProcessService not initialized');
   return instance;
+}
+
+/**
+ * Tests whether a UDP port is free by trying to bind it on 0.0.0.0.
+ * Returns null when the port is free, or a PID (when we can resolve it on
+ * Windows) or 0 (port is busy, owner unknown) when it's not.
+ */
+async function udpPortBusy(port: number): Promise<number | null> {
+  const free = await new Promise<boolean>((resolvePromise) => {
+    const sock = createSocket('udp4');
+    sock.once('error', () => resolvePromise(false));
+    sock.once('listening', () => {
+      sock.close();
+      resolvePromise(true);
+    });
+    try {
+      sock.bind(port);
+    } catch {
+      resolvePromise(false);
+    }
+  });
+  if (free) return null;
+  if (platform() === 'win32') {
+    const pid = await resolveUdpOwnerPidWin(port);
+    return pid ?? 0;
+  }
+  return 0;
+}
+
+function resolveUdpOwnerPidWin(port: number): Promise<number | null> {
+  return new Promise((resolvePromise) => {
+    // `netstat -ano -p UDP` lists "  UDP    0.0.0.0:16261     *:*    <pid>".
+    // findstr filters to the relevant lines; we parse the last numeric column.
+    const proc = spawn('cmd.exe', ['/c', `netstat -ano -p UDP | findstr :${port}`], {
+      windowsHide: true,
+    });
+    let stdout = '';
+    proc.stdout.on('data', (c) => {
+      stdout += c.toString();
+    });
+    proc.on('error', () => resolvePromise(null));
+    proc.on('exit', () => {
+      for (const line of stdout.split(/\r?\n/)) {
+        const m = line.trim().match(/\s(\d+)\s*$/);
+        if (m) {
+          const pid = Number(m[1]);
+          if (Number.isFinite(pid) && pid > 0) {
+            resolvePromise(pid);
+            return;
+          }
+        }
+      }
+      resolvePromise(null);
+    });
+  });
 }
 
 function parsePlayerLines(lines: string[]): Array<{ id: number; name: string }> {
