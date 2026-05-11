@@ -1,6 +1,18 @@
-import { Cog, Download, LayoutDashboard, LogOut, Package, Terminal, Users } from 'lucide-react';
+import { useQuery } from '@tanstack/react-query';
+import {
+  Archive,
+  Cog,
+  Download,
+  LayoutDashboard,
+  LogOut,
+  Package,
+  Server as ServerIcon,
+  Terminal,
+  Users,
+} from 'lucide-react';
 import { NavLink, Outlet } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
+import { api, ApiError } from '@/lib/api';
 import { clearToken } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 
@@ -11,13 +23,26 @@ interface LayoutProps {
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/console', icon: Terminal, label: 'Console' },
+  { to: '/servers', icon: ServerIcon, label: 'Profiles' },
   { to: '/install', icon: Download, label: 'Install' },
   { to: '/config', icon: Cog, label: 'Config' },
   { to: '/players', icon: Users, label: 'Players' },
   { to: '/mods', icon: Package, label: 'Mods' },
+  { to: '/saves', icon: Archive, label: 'Saves' },
 ];
 
+interface ProfilesResponse {
+  activeServer: string;
+}
+
 export function Layout({ onLogout }: LayoutProps): JSX.Element {
+  const active = useQuery({
+    queryKey: ['active-server'],
+    queryFn: () => api<ProfilesResponse>('/api/servers'),
+    refetchInterval: 10_000,
+    retry: (count, err) => !(err instanceof ApiError) && count < 1,
+  });
+
   function logout(): void {
     clearToken();
     onLogout();
@@ -25,11 +50,19 @@ export function Layout({ onLogout }: LayoutProps): JSX.Element {
 
   return (
     <div className="flex min-h-screen">
-      <aside className="w-56 shrink-0 border-r border-border bg-card">
+      <aside className="flex w-56 shrink-0 flex-col border-r border-border bg-card">
         <div className="flex h-16 items-center border-b border-border px-6">
           <span className="text-lg font-bold tracking-tight">zombadwin</span>
         </div>
-        <nav className="space-y-1 p-3">
+        <div className="border-b border-border px-4 py-3">
+          <p className="text-[10px] uppercase tracking-wider text-muted-foreground">
+            Active profile
+          </p>
+          <p className="truncate font-mono text-sm font-medium">
+            {active.data?.activeServer ?? '—'}
+          </p>
+        </div>
+        <nav className="flex-1 space-y-1 p-3">
           {navItems.map(({ to, icon: Icon, label, end }) => (
             <NavLink
               key={to}
@@ -49,7 +82,7 @@ export function Layout({ onLogout }: LayoutProps): JSX.Element {
             </NavLink>
           ))}
         </nav>
-        <div className="absolute bottom-3 w-56 px-3">
+        <div className="border-t border-border p-3">
           <Button variant="ghost" size="sm" onClick={logout} className="w-full justify-start">
             <LogOut className="mr-2 h-4 w-4" />
             Sign out

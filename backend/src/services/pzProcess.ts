@@ -1,7 +1,7 @@
 import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import { platform } from 'node:os';
-import type { AppConfig } from '../config.js';
+import { type AppConfig, loadConfig } from '../config.js';
 import { resolveInstallDir, startScriptName } from './paths.js';
 
 export type ServerState = 'stopped' | 'starting' | 'running' | 'stopping';
@@ -52,6 +52,7 @@ export class PzProcessService extends EventEmitter {
   private exitCode: number | null = null;
   private readonly logs: LogLine[] = [];
   private nextLogId = 1;
+  /** Server name used by the *currently running* process; tracks config.activeServer at start time. */
   private serverName = 'servertest';
   private stopGraceTimer: NodeJS.Timeout | null = null;
 
@@ -75,8 +76,14 @@ export class PzProcessService extends EventEmitter {
     return this.logs.slice(this.logs.length - limit);
   }
 
-  setServerName(name: string): void {
-    this.serverName = name;
+  /** Returns the server name used by the currently running process (or last run). */
+  getServerName(): string {
+    return this.serverName;
+  }
+
+  /** True iff a process is currently up and using this server name. */
+  isRunningAs(name: string): boolean {
+    return this.proc !== null && this.serverName === name;
   }
 
   private resolveSpawnConfig(): SpawnConfig {
@@ -118,6 +125,10 @@ export class PzProcessService extends EventEmitter {
     if (this.state !== 'stopped') {
       throw new Error(`Cannot start while state is ${this.state}`);
     }
+
+    // Pick up the active profile name from the persisted config, so switching
+    // profiles via the API takes effect on the next start.
+    this.serverName = loadConfig().activeServer || this.serverName;
 
     const spawnCfg = this.resolveSpawnConfig();
     this.setState('starting');

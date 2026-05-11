@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { loadConfig } from '../config.js';
 import { defaultUserDir } from '../services/paths.js';
-import { getPzProcess } from '../services/pzProcess.js';
+import { getActiveServerName } from '../services/profiles.js';
 import { readIniFile, serverIniPath, writeIniFile } from '../services/iniFile.js';
 import {
   fetchWorkshopMetadata,
@@ -25,7 +25,7 @@ const PutBody = z.object({
 function currentIni(): { path: string; serverName: string } {
   const cfg = loadConfig();
   const userDir = cfg.pzUserDir ?? defaultUserDir();
-  const serverName = getPzProcess().getStatus().serverName || 'servertest';
+  const serverName = getActiveServerName();
   return { path: serverIniPath(userDir, serverName), serverName };
 }
 

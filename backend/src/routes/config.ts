@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import { z } from 'zod';
 import { loadConfig } from '../config.js';
 import { defaultUserDir } from '../services/paths.js';
-import { getPzProcess } from '../services/pzProcess.js';
+import { getActiveServerName } from '../services/profiles.js';
 import {
   readIniFile,
   serverIniPath,
@@ -33,7 +33,7 @@ const PutSandboxBody = z.object({
 });
 
 function currentServerName(): string {
-  return getPzProcess().getStatus().serverName || 'servertest';
+  return getActiveServerName();
 }
 
 function currentUserDir(): string {

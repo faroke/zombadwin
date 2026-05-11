@@ -9,6 +9,7 @@ import { Install } from '@/pages/Install';
 import { Login } from '@/pages/Login';
 import { Mods } from '@/pages/Mods';
 import { Players } from '@/pages/Players';
+import { Servers } from '@/pages/Servers';
 
 export function App(): JSX.Element {
   const [authed, setAuthed] = useState<boolean>(() => getToken() !== null);
@@ -25,6 +26,7 @@ export function App(): JSX.Element {
           <Route path="console" element={<Console />} />
           <Route path="install" element={<Install />} />
           <Route path="config" element={<Config />} />
+          <Route path="servers" element={<Servers />} />
           <Route path="players" element={<Players />} />
           <Route path="mods" element={<Mods />} />
           <Route path="*" element={<Navigate to="/" replace />} />

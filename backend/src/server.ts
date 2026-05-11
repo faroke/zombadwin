@@ -13,6 +13,7 @@ import { registerInstallRoutes } from './routes/install.js';
 import { registerModRoutes } from './routes/mods.js';
 import { registerPlayerRoutes } from './routes/players.js';
 import { registerServerRoutes } from './routes/server.js';
+import { registerServerProfileRoutes } from './routes/servers.js';
 import { initPzProcess } from './services/pzProcess.js';
 import { initInstallService } from './services/steamcmd.js';
 import { registerInstallSocket } from './ws/install.js';
@@ -60,6 +61,7 @@ async function main(): Promise<void> {
   await registerConfigRoutes(app);
   await registerPlayerRoutes(app);
   await registerModRoutes(app);
+  await registerServerProfileRoutes(app);
   await registerLogsSocket(app, config);
   await registerInstallSocket(app, config);
 
