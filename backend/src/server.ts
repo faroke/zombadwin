@@ -3,6 +3,7 @@ import websocket from '@fastify/websocket';
 import Fastify from 'fastify';
 import { registerAuth } from './auth.js';
 import { loadConfig } from './config.js';
+import { registerConfigRoutes } from './routes/config.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerInstallRoutes } from './routes/install.js';
 import { registerServerRoutes } from './routes/server.js';
@@ -33,6 +34,7 @@ async function main(): Promise<void> {
   await registerHealthRoute(app);
   await registerServerRoutes(app);
   await registerInstallRoutes(app);
+  await registerConfigRoutes(app);
   await registerLogsSocket(app, config);
   await registerInstallSocket(app, config);
 
