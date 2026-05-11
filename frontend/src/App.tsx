@@ -7,7 +7,7 @@ import { Console } from '@/pages/Console';
 import { Dashboard } from '@/pages/Dashboard';
 import { Install } from '@/pages/Install';
 import { Login } from '@/pages/Login';
-import { Placeholder } from '@/pages/Placeholder';
+import { Mods } from '@/pages/Mods';
 import { Players } from '@/pages/Players';
 
 export function App(): JSX.Element {
@@ -26,7 +26,7 @@ export function App(): JSX.Element {
           <Route path="install" element={<Install />} />
           <Route path="config" element={<Config />} />
           <Route path="players" element={<Players />} />
-          <Route path="mods" element={<Placeholder title="Mods" milestone="Workshop manager" />} />
+          <Route path="mods" element={<Mods />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>
       </Routes>

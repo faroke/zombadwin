@@ -6,6 +6,7 @@ import { loadConfig } from './config.js';
 import { registerConfigRoutes } from './routes/config.js';
 import { registerHealthRoute } from './routes/health.js';
 import { registerInstallRoutes } from './routes/install.js';
+import { registerModRoutes } from './routes/mods.js';
 import { registerPlayerRoutes } from './routes/players.js';
 import { registerServerRoutes } from './routes/server.js';
 import { initPzProcess } from './services/pzProcess.js';
@@ -37,6 +38,7 @@ async function main(): Promise<void> {
   await registerInstallRoutes(app);
   await registerConfigRoutes(app);
   await registerPlayerRoutes(app);
+  await registerModRoutes(app);
   await registerLogsSocket(app, config);
   await registerInstallSocket(app, config);
 
