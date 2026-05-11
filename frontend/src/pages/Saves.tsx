@@ -1,8 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Archive, Clock, Download, History, RotateCcw, Trash2 } from 'lucide-react';
-import { useState } from 'react';
+import {
+  Archive,
+  Clock,
+  Download,
+  History,
+  RotateCcw,
+  Timer,
+  Trash2,
+} from 'lucide-react';
+import { useEffect, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { api, ApiError } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -27,6 +36,20 @@ interface SavesResponse {
   profile: string;
   save: SaveInfo;
   backups: BackupFile[];
+}
+
+interface AutoBackupConfig {
+  enabled: boolean;
+  intervalMinutes: number;
+  keepLast: number;
+}
+
+interface AutoBackupStatus {
+  armed: boolean;
+  lastRanAt: number | null;
+  lastError: string | null;
+  nextScheduledAt: number | null;
+  config: AutoBackupConfig;
 }
 
 function humanBytes(bytes: number): string {
@@ -181,6 +204,8 @@ export function Saves(): JSX.Element {
         </CardContent>
       </Card>
 
+      <AutoBackupCard />
+
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2 text-base">
@@ -260,5 +285,166 @@ function Stat({ label, value, mono }: { label: string; value: string; mono?: boo
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className={cn('mt-0.5 text-sm font-medium', mono && 'font-mono')}>{value}</div>
     </div>
+  );
+}
+
+function AutoBackupCard(): JSX.Element {
+  const qc = useQueryClient();
+  const status = useQuery({
+    queryKey: ['auto-backup'],
+    queryFn: () => api<AutoBackupStatus>('/api/saves/auto-backup'),
+    refetchInterval: 15_000,
+  });
+
+  const [draft, setDraft] = useState<AutoBackupConfig | null>(null);
+  const [feedback, setFeedback] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    if (status.data?.config) setDraft(status.data.config);
+  }, [status.data?.config]);
+
+  const update = useMutation({
+    mutationFn: (cfg: AutoBackupConfig) =>
+      api<AutoBackupStatus>('/api/saves/auto-backup', {
+        method: 'PUT',
+        body: JSON.stringify(cfg),
+      }),
+    onSuccess: () => {
+      setFeedback({ ok: true, text: 'Auto-backup settings saved.' });
+      setTimeout(() => setFeedback(null), 3000);
+      void qc.invalidateQueries({ queryKey: ['auto-backup'] });
+      void qc.invalidateQueries({ queryKey: ['saves'] });
+    },
+    onError: (err: Error) => {
+      setFeedback({
+        ok: false,
+        text: err instanceof ApiError ? `Save failed (${err.status})` : err.message,
+      });
+    },
+  });
+
+  const dirty =
+    !!draft &&
+    !!status.data &&
+    (draft.enabled !== status.data.config.enabled ||
+      draft.intervalMinutes !== status.data.config.intervalMinutes ||
+      draft.keepLast !== status.data.config.keepLast);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Timer className="h-4 w-4" />
+          Auto-backup
+          {status.data?.armed && (
+            <span className="rounded-full border border-primary/40 bg-primary/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-primary">
+              armed
+            </span>
+          )}
+        </CardTitle>
+        <CardDescription>
+          Periodic snapshots of the active profile's save while the server is running. Manual
+          backups (above) are never rotated; only auto-backups respect the retention limit.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {draft && (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Enabled</span>
+              <label className="inline-flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={draft.enabled}
+                  onChange={(e) => setDraft({ ...draft, enabled: e.target.checked })}
+                  className="h-4 w-4 rounded border-input accent-primary"
+                />
+                <span className="text-muted-foreground">{draft.enabled ? 'On' : 'Off'}</span>
+              </label>
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Interval (minutes)</span>
+              <Input
+                type="number"
+                min={1}
+                max={1440}
+                value={draft.intervalMinutes}
+                onChange={(e) =>
+                  setDraft({ ...draft, intervalMinutes: Math.max(1, Number(e.target.value) || 1) })
+                }
+              />
+            </label>
+            <label className="flex flex-col gap-1 text-sm">
+              <span className="text-xs text-muted-foreground">Keep last N (0 = unlimited)</span>
+              <Input
+                type="number"
+                min={0}
+                max={1000}
+                value={draft.keepLast}
+                onChange={(e) =>
+                  setDraft({ ...draft, keepLast: Math.max(0, Number(e.target.value) || 0) })
+                }
+              />
+            </label>
+          </div>
+        )}
+
+        {status.data && (
+          <div className="grid gap-2 text-xs text-muted-foreground sm:grid-cols-3">
+            <span>
+              Last run:{' '}
+              {status.data.lastRanAt ? relativeTime(status.data.lastRanAt) : 'never'}
+              {status.data.lastError && (
+                <span className="ml-2 text-destructive">({status.data.lastError})</span>
+              )}
+            </span>
+            <span>
+              Next:{' '}
+              {status.data.armed && status.data.nextScheduledAt
+                ? `in ${Math.max(0, Math.round((status.data.nextScheduledAt - Date.now()) / 60_000))}m`
+                : status.data.config.enabled
+                  ? '— waiting for server to start'
+                  : 'disabled'}
+            </span>
+            <span>
+              Auto-archives kept:{' '}
+              {status.data.config.keepLast === 0 ? 'unlimited' : status.data.config.keepLast}
+            </span>
+          </div>
+        )}
+
+        {feedback && (
+          <div
+            className={cn(
+              'rounded-md border px-3 py-2 text-sm',
+              feedback.ok
+                ? 'border-primary/40 bg-primary/10 text-primary'
+                : 'border-destructive/40 bg-destructive/10 text-destructive',
+            )}
+          >
+            {feedback.text}
+          </div>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            onClick={() => draft && update.mutate(draft)}
+            disabled={!dirty || update.isPending}
+          >
+            {update.isPending ? 'Saving…' : 'Apply'}
+          </Button>
+          {dirty && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => status.data && setDraft(status.data.config)}
+            >
+              Discard
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
   );
 }

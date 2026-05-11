@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+import { getAutoBackup, updateAutoBackupConfig } from '../services/autoBackup.js';
 import { getActiveServerName } from '../services/profiles.js';
 import { getPzProcess } from '../services/pzProcess.js';
 import {
@@ -13,6 +14,12 @@ import {
 
 const FilenameBody = z.object({
   filename: z.string().regex(/^[A-Za-z0-9._-]+\.tar\.gz$/, 'invalid filename'),
+});
+
+const AutoBackupBody = z.object({
+  enabled: z.boolean(),
+  intervalMinutes: z.number().int().min(1).max(1440),
+  keepLast: z.number().int().min(0).max(1000),
 });
 
 function isRunning(): boolean {
@@ -77,5 +84,16 @@ export async function registerSaveRoutes(app: FastifyInstance): Promise<void> {
       reply.code(409);
       return { error: 'delete_failed', message: (err as Error).message };
     }
+  });
+
+  app.get('/api/saves/auto-backup', async () => getAutoBackup().getStatus());
+
+  app.put('/api/saves/auto-backup', async (req, reply) => {
+    const parse = AutoBackupBody.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: 'invalid_body', issues: parse.error.issues };
+    }
+    return updateAutoBackupConfig(parse.data);
   });
 }

@@ -15,6 +15,7 @@ import { registerPlayerRoutes } from './routes/players.js';
 import { registerSaveRoutes } from './routes/saves.js';
 import { registerServerRoutes } from './routes/server.js';
 import { registerServerProfileRoutes } from './routes/servers.js';
+import { initAutoBackup } from './services/autoBackup.js';
 import { initPzProcess } from './services/pzProcess.js';
 import { initInstallService } from './services/steamcmd.js';
 import { registerInstallSocket } from './ws/install.js';
@@ -66,6 +67,9 @@ async function main(): Promise<void> {
   await registerSaveRoutes(app);
   await registerLogsSocket(app, config);
   await registerInstallSocket(app, config);
+
+  // Auto-backup must be initialized after pzProcess (it subscribes to status events).
+  initAutoBackup();
 
   // Serve the built React app from the same port in production. The auth hook
   // only gates /api/*, so the static assets stay reachable and the SPA handles
