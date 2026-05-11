@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDown,
   ArrowUp,
+  CloudDownload,
   HardDriveDownload,
   Loader2,
   Map as MapIcon,
@@ -62,6 +63,19 @@ interface ScanResponse {
   entries: ScanEntry[];
 }
 
+interface DownloadItem {
+  workshopId: string;
+  ok: boolean;
+  status: string;
+}
+
+interface DownloadResponse {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  items: DownloadItem[];
+}
+
 export function Mods(): JSX.Element {
   const qc = useQueryClient();
   const query = useQuery({
@@ -119,6 +133,27 @@ export function Mods(): JSX.Element {
     },
     onError: (err: Error) =>
       notify(false, err instanceof ApiError ? `Save failed (${err.status})` : err.message),
+  });
+
+  const download = useMutation({
+    mutationFn: () => api<DownloadResponse>('/api/mods/download', { method: 'POST' }),
+    onSuccess: (res) => {
+      const failed = res.items.filter((i) => !i.ok);
+      if (res.items.length === 0) {
+        notify(false, 'No workshop subscriptions to download. Add some first, then save.');
+        return;
+      }
+      if (failed.length === 0) {
+        notify(true, `SteamCMD downloaded ${res.items.length} workshop item${res.items.length > 1 ? 's' : ''}. Click "Scan disk" next.`);
+      } else if (failed.length === res.items.length) {
+        notify(false, `SteamCMD failed for all ${res.items.length} item(s). Check backend logs for details.`);
+      } else {
+        const ok = res.items.length - failed.length;
+        notify(false, `${ok} downloaded, ${failed.length} failed (${failed.map((f) => f.workshopId).join(', ')}).`);
+      }
+    },
+    onError: (err: Error) =>
+      notify(false, err instanceof ApiError ? `Download failed (${err.status})` : err.message),
   });
 
   const scan = useMutation({
@@ -282,6 +317,16 @@ export function Mods(): JSX.Element {
         </div>
         <div className="flex items-center gap-2">
           {dirty && <span className="text-xs text-muted-foreground">Unsaved changes</span>}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => download.mutate()}
+            disabled={download.isPending}
+            title="Pre-download every WorkshopItems entry via SteamCMD into the PZ install. Avoids the runtime Steam download crash some mods trigger inside PZ dedicated server."
+          >
+            <CloudDownload className="mr-2 h-4 w-4" />
+            {download.isPending ? 'Downloading…' : 'Download via SteamCMD'}
+          </Button>
           <Button
             variant="outline"
             size="sm"
