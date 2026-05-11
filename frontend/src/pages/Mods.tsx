@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   ArrowDown,
   ArrowUp,
+  HardDriveDownload,
   Loader2,
   Map as MapIcon,
   Package,
@@ -46,6 +47,19 @@ interface PendingAdd {
   meta: WorkshopMetadata;
   modIds: string[];
   maps: string[];
+}
+
+interface ScanEntry {
+  workshopId: string;
+  found: boolean;
+  modFolders: string[];
+  mapFolders: string[];
+}
+
+interface ScanResponse {
+  installDir: string | null;
+  workshopRoot: string | null;
+  entries: ScanEntry[];
 }
 
 export function Mods(): JSX.Element {
@@ -105,6 +119,66 @@ export function Mods(): JSX.Element {
     },
     onError: (err: Error) =>
       notify(false, err instanceof ApiError ? `Save failed (${err.status})` : err.message),
+  });
+
+  const scan = useMutation({
+    mutationFn: () => api<ScanResponse>('/api/mods/scan'),
+    onSuccess: (res) => {
+      if (!res.workshopRoot) {
+        notify(false, 'No PZ install directory configured — finish the SteamCMD install first.');
+        return;
+      }
+      // For each workshop subscription, look at folders on disk and merge any
+      // that aren't already in the Loaded mods / Map lists.
+      const nextMods = [...mods];
+      const nextMap = [...map];
+      let addedMods = 0;
+      let addedMaps = 0;
+      let notDownloaded = 0;
+      for (const entry of res.entries) {
+        if (!entry.found) {
+          notDownloaded += 1;
+          continue;
+        }
+        for (const folder of entry.modFolders) {
+          if (!nextMods.includes(folder)) {
+            nextMods.push(folder);
+            addedMods += 1;
+          }
+        }
+        for (const m of entry.mapFolders) {
+          if (nextMap.includes(m)) continue;
+          const baseIdx = nextMap.length > 0 ? nextMap.length - 1 : -1;
+          if (baseIdx === -1) nextMap.push(m);
+          else nextMap.splice(baseIdx, 0, m);
+          addedMaps += 1;
+        }
+      }
+      setMods(nextMods);
+      setMap(nextMap);
+
+      const parts: string[] = [];
+      if (addedMods > 0) parts.push(`${addedMods} mod${addedMods > 1 ? 's' : ''}`);
+      if (addedMaps > 0) parts.push(`${addedMaps} map${addedMaps > 1 ? 's' : ''}`);
+      if (parts.length === 0) {
+        if (notDownloaded === res.entries.length && res.entries.length > 0) {
+          notify(
+            false,
+            'No Workshop content found on disk yet. Start the server once so PZ downloads the subscribed items.',
+          );
+        } else {
+          notify(true, 'Scan complete — nothing new to add, all mods already listed.');
+        }
+      } else {
+        const skipMsg =
+          notDownloaded > 0
+            ? ` (${notDownloaded} not downloaded yet — start the server first)`
+            : '';
+        notify(true, `Scanned ${res.workshopRoot}: added ${parts.join(' and ')}${skipMsg}.`);
+      }
+    },
+    onError: (err: Error) =>
+      notify(false, err instanceof ApiError ? `Scan failed (${err.status})` : err.message),
   });
 
   function discard(): void {
@@ -208,6 +282,16 @@ export function Mods(): JSX.Element {
         </div>
         <div className="flex items-center gap-2">
           {dirty && <span className="text-xs text-muted-foreground">Unsaved changes</span>}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => scan.mutate()}
+            disabled={scan.isPending}
+            title="Scan PZ's downloaded Workshop content and import any mod folder names not yet in Mods=. Use this after the server has run once."
+          >
+            <HardDriveDownload className="mr-2 h-4 w-4" />
+            {scan.isPending ? 'Scanning…' : 'Scan disk'}
+          </Button>
           <Button variant="outline" size="sm" onClick={discard} disabled={!dirty}>
             Discard
           </Button>

@@ -10,6 +10,7 @@ import {
   resolveWorkshopInput,
   splitList,
 } from '../services/workshop.js';
+import { scanWorkshopItems } from '../services/workshopScan.js';
 
 const ResolveBody = z.object({
   input: z.string().min(1).max(500),
@@ -63,6 +64,17 @@ export async function registerModRoutes(app: FastifyInstance): Promise<void> {
       reply.code(502);
       return { error: 'workshop_fetch_failed', message: (err as Error).message };
     }
+  });
+
+  app.get('/api/mods/scan', async (_req, reply) => {
+    const { path } = currentIni();
+    if (!existsSync(path)) {
+      reply.code(404);
+      return { error: 'ini_not_found', path };
+    }
+    const file = readIniFile(path);
+    const ids = splitList(file.values.WorkshopItems);
+    return { ...scanWorkshopItems(ids) };
   });
 
   app.put('/api/mods', async (req, reply) => {
