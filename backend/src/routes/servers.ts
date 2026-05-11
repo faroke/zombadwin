@@ -1,4 +1,5 @@
 import type { FastifyInstance } from 'fastify';
+import { join } from 'node:path';
 import { z } from 'zod';
 import {
   createProfile,
@@ -8,6 +9,7 @@ import {
   renameProfile,
   setActiveProfile,
 } from '../services/profiles.js';
+import { defaultUserDir } from '../services/paths.js';
 import { getPzProcess } from '../services/pzProcess.js';
 import { loadConfig } from '../config.js';
 
@@ -41,8 +43,11 @@ function handleProfileError(reply: import('fastify').FastifyReply, err: unknown)
 export async function registerServerProfileRoutes(app: FastifyInstance): Promise<void> {
   app.get('/api/servers', async () => {
     const cfg = loadConfig();
+    const userDir = cfg.pzUserDir ?? defaultUserDir();
     return {
       activeServer: cfg.activeServer,
+      userDir,
+      scanDir: join(userDir, 'Server'),
       profiles: listProfiles(),
     };
   });

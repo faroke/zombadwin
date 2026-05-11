@@ -12,6 +12,8 @@ export interface ProfileSummary {
   hasSave: boolean;
   iniBytes: number | null;
   iniModifiedAt: number | null;
+  /** True if the profile was found on disk but is not yet in knownServers */
+  discovered: boolean;
 }
 
 export class ProfileError extends Error {
@@ -60,25 +62,34 @@ export function getActiveServerName(): string {
 
 export function listProfiles(): ProfileSummary[] {
   const cfg = loadConfig();
-  const known = new Set<string>(cfg.knownServers);
-  known.add(cfg.activeServer);
+  const knownList = new Set<string>(cfg.knownServers);
+  knownList.add(cfg.activeServer);
 
   // Discover any dedicated server profile we missed by scanning Server/*.ini.
   // (We do NOT scan Saves/Multiplayer because that folder also contains client-
   // side saves keyed by SteamID_host_hash from when the user played somewhere.)
+  // PZ's auxiliary files in Server/ are .lua (SandboxVars, spawnregions) so we
+  // can take every .ini at face value — including names that themselves
+  // contain underscores like "my_pvp_server.ini".
+  const all = new Set<string>(knownList);
   const sDir = serverDir(cfg);
   if (existsSync(sDir)) {
     for (const entry of readdirSync(sDir)) {
-      if (entry.endsWith('.ini') && !entry.includes('_')) {
-        known.add(entry.replace(/\.ini$/, ''));
+      if (entry.endsWith('.ini')) {
+        all.add(entry.replace(/\.ini$/, ''));
       }
     }
   }
 
-  return [...known].sort((a, b) => a.localeCompare(b)).map((name) => summarizeProfile(cfg, name));
+  return [...all]
+    .sort((a, b) => a.localeCompare(b))
+    .map((name) => ({
+      ...summarizeProfile(cfg, name),
+      discovered: !knownList.has(name),
+    }));
 }
 
-export function summarizeProfile(cfg: AppConfig, name: string): ProfileSummary {
+export function summarizeProfile(cfg: AppConfig, name: string): Omit<ProfileSummary, 'discovered'> {
   const ini = join(serverDir(cfg), `${name}.ini`);
   const sandbox = join(serverDir(cfg), `${name}_SandboxVars.lua`);
   const save = profileSaveDir(cfg, name);
@@ -116,7 +127,7 @@ export function createProfile(name: string): ProfileSummary {
   }
   cfg.knownServers = [...cfg.knownServers, name];
   persistConfig(cfg);
-  return summarizeProfile(cfg, name);
+  return { ...summarizeProfile(cfg, name), discovered: false };
 }
 
 export function deleteProfile(

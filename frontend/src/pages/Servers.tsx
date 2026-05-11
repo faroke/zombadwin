@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   CheckCircle2,
   ChevronRight,
+  Download,
   Edit2,
   Plus,
   Server as ServerIcon,
@@ -21,10 +22,13 @@ interface ProfileSummary {
   hasSave: boolean;
   iniBytes: number | null;
   iniModifiedAt: number | null;
+  discovered: boolean;
 }
 
 interface ProfilesResponse {
   activeServer: string;
+  userDir: string;
+  scanDir: string;
   profiles: ProfileSummary[];
 }
 
@@ -63,6 +67,17 @@ export function Servers(): JSX.Element {
     },
     onError: (err: Error) =>
       notify(false, err instanceof ApiError ? `Create failed (${err.status})` : err.message),
+  });
+
+  const importProfile = useMutation({
+    mutationFn: (name: string) =>
+      api('/api/servers', { method: 'POST', body: JSON.stringify({ name }) }),
+    onSuccess: (_, name) => {
+      notify(true, `Imported "${name}" into the library.`);
+      void qc.invalidateQueries({ queryKey: ['profiles'] });
+    },
+    onError: (err: Error) =>
+      notify(false, err instanceof ApiError ? `Import failed (${err.status})` : err.message),
   });
 
   const setActive = useMutation({
@@ -122,6 +137,12 @@ export function Servers(): JSX.Element {
             </span>
           )}
         </p>
+        {profiles.data?.scanDir && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Scanning <code>{profiles.data.scanDir}</code> for existing <code>*.ini</code> files —
+            any profile already set up there appears below as "Discovered" and can be imported.
+          </p>
+        )}
       </header>
 
       {feedback && (
@@ -201,6 +222,14 @@ export function Servers(): JSX.Element {
                     ) : (
                       <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
                     )}
+                    {p.discovered && (
+                      <span
+                        className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] uppercase tracking-wider text-amber-400"
+                        title="Found on disk but not yet in the zombadwin library. Click Import to adopt it, or Set active to do both at once."
+                      >
+                        Discovered
+                      </span>
+                    )}
                     {isRenaming ? (
                       <form
                         onSubmit={(e) => {
@@ -237,6 +266,18 @@ export function Servers(): JSX.Element {
                   </div>
                   {!isRenaming && (
                     <div className="flex items-center gap-1">
+                      {p.discovered && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          disabled={importProfile.isPending}
+                          onClick={() => importProfile.mutate(p.name)}
+                          title="Add to the zombadwin library without switching active"
+                        >
+                          <Download className="mr-1 h-3.5 w-3.5" />
+                          Import
+                        </Button>
+                      )}
                       <Button
                         size="sm"
                         variant="outline"
