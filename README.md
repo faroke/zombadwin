@@ -72,6 +72,16 @@ npm start           # runs the backend; if frontend/dist exists, it's served on 
 
 The built backend lives in `backend/dist/`. With `npm start` (or `node backend/dist/server.js`) the API and the React SPA share port 28910 — there is no need to run Vite in production, and nothing else needs to be open to the network.
 
+## Windows installer
+
+For a turn-key install (Windows service + tray icon, no Node prerequisite for the end user), build a setup `.exe`:
+
+```powershell
+.\installer\build.ps1
+```
+
+It produces `dist\installer\zombadwin-setup-vX.Y.Z.exe` that registers a Windows service (via NSSM), drops a tray helper, and ships a bundled Node runtime. See [installer/README.md](./installer/README.md) for prerequisites, the install layout (Program Files vs. ProgramData), and the LocalSystem caveat around `pzUserDir`.
+
 ## Configuration
 
 The backend reads `backend/data/config.json` on every start. The file is created automatically with a random bearer token on first run. Important fields:

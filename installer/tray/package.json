@@ -1,0 +1,10 @@
+{
+  "name": "zombadwin-tray",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "tray.mjs",
+  "dependencies": {
+    "systray": "^1.0.5"
+  }
+}

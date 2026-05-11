@@ -44,3 +44,10 @@ Thumbs.db
 .cache/
 .turbo/
 coverage/
+
+# Installer build artifacts
+installer/cache/
+installer/staging/
+installer/tray/node_modules/
+installer/assets/icon.ico
+dist/installer/
