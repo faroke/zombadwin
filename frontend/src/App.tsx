@@ -8,6 +8,7 @@ import { Dashboard } from '@/pages/Dashboard';
 import { Install } from '@/pages/Install';
 import { Login } from '@/pages/Login';
 import { Placeholder } from '@/pages/Placeholder';
+import { Players } from '@/pages/Players';
 
 export function App(): JSX.Element {
   const [authed, setAuthed] = useState<boolean>(() => getToken() !== null);
@@ -24,7 +25,7 @@ export function App(): JSX.Element {
           <Route path="console" element={<Console />} />
           <Route path="install" element={<Install />} />
           <Route path="config" element={<Config />} />
-          <Route path="players" element={<Placeholder title="Players" milestone="kick/ban/admin/whitelist" />} />
+          <Route path="players" element={<Players />} />
           <Route path="mods" element={<Placeholder title="Mods" milestone="Workshop manager" />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Route>

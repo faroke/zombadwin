@@ -8,6 +8,12 @@ setTimeout(() => {
 }, 200);
 
 const rl = readline.createInterface({ input: process.stdin });
+// Fake roster used to test the players query path.
+const fakePlayers = [
+  { id: 0, name: 'Alice' },
+  { id: 1, name: 'Bob the Builder' },
+];
+
 rl.on('line', (line) => {
   const cmd = line.trim();
   if (cmd === 'quit' || cmd === 'exit') {
@@ -16,6 +22,11 @@ rl.on('line', (line) => {
       process.stdout.write('Server stopped.\n');
       process.exit(0);
     }, 100);
+    return;
+  }
+  if (cmd === 'players') {
+    process.stdout.write(`Players connected (${fakePlayers.length}):\n`);
+    for (const p of fakePlayers) process.stdout.write(`-${p.name} (id=${p.id})\n`);
     return;
   }
   process.stdout.write(`[fake-pz] received: ${cmd}\n`);

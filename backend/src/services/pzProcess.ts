@@ -171,6 +171,72 @@ export class PzProcessService extends EventEmitter {
     this.proc.stdin.write(`${trimmed}\n`);
   }
 
+  /**
+   * Sends the `players` command and collects the connected-player list from
+   * the server's stdout. PZ replies with:
+   *   "Players connected (N):"
+   *   "-username (id=0)"
+   *   ...
+   *
+   * We start collecting at the header line, then accumulate any `-name` lines
+   * until output goes quiet for `quietMs` ms.
+   */
+  async queryPlayers(
+    timeoutMs = 2500,
+    quietMs = 350,
+  ): Promise<Array<{ id: number; name: string }>> {
+    if (this.state !== 'running') throw new Error('server not running');
+    return new Promise((resolvePromise, rejectPromise) => {
+      const collected: string[] = [];
+      let capturing = false;
+      let quietTimer: NodeJS.Timeout | null = null;
+
+      const finish = (): void => {
+        cleanup();
+        resolvePromise(parsePlayerLines(collected));
+      };
+      const onLog = (line: LogLine): void => {
+        if (line.source !== 'out') return;
+        if (!capturing) {
+          if (/Players connected/i.test(line.text)) {
+            capturing = true;
+            collected.push(line.text);
+            quietTimer = setTimeout(finish, quietMs);
+          }
+          return;
+        }
+        // Once capturing, take any line that looks like a player entry or is blank.
+        if (/^-/.test(line.text) || line.text.trim() === '') {
+          collected.push(line.text);
+          if (quietTimer) clearTimeout(quietTimer);
+          quietTimer = setTimeout(finish, quietMs);
+          return;
+        }
+        // Anything else means PZ moved on — terminate collection.
+        finish();
+      };
+      const cleanup = (): void => {
+        this.off('log', onLog);
+        if (quietTimer) clearTimeout(quietTimer);
+        clearTimeout(globalTimeout);
+      };
+      const globalTimeout = setTimeout(() => {
+        cleanup();
+        if (collected.length > 0) {
+          resolvePromise(parsePlayerLines(collected));
+        } else {
+          rejectPromise(new Error('player list query timed out'));
+        }
+      }, timeoutMs);
+
+      this.on('log', onLog);
+      void this.sendCommand('players').catch((err) => {
+        cleanup();
+        rejectPromise(err);
+      });
+    });
+  }
+
   async stop(): Promise<StatusSnapshot> {
     if (this.state === 'stopped') return this.getStatus();
     if (this.state === 'stopping') return this.getStatus();
@@ -268,4 +334,16 @@ export function initPzProcess(config: AppConfig): PzProcessService {
 export function getPzProcess(): PzProcessService {
   if (!instance) throw new Error('PzProcessService not initialized');
   return instance;
+}
+
+function parsePlayerLines(lines: string[]): Array<{ id: number; name: string }> {
+  const out: Array<{ id: number; name: string }> = [];
+  for (const raw of lines) {
+    const m = raw.match(/^-(.*?)\s*(?:\(id=(\d+)\))?\s*$/);
+    if (!m) continue;
+    const name = m[1]?.trim();
+    if (!name) continue;
+    out.push({ id: m[2] ? Number(m[2]) : -1, name });
+  }
+  return out;
 }
