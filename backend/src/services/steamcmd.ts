@@ -36,6 +36,8 @@ export interface InstallLogLine {
 export interface InstallSnapshot {
   state: InstallState;
   targetDir: string | null;
+  /** Steam beta branch used by the last/current install (e.g. "b42unstable"). null = default branch (B41 stable). */
+  branch: string | null;
   /** Steam download/install percent (0-100), parsed from steamcmd output when available */
   percent: number | null;
   error: string | null;
@@ -67,6 +69,7 @@ export declare interface InstallService {
 export class InstallService extends EventEmitter {
   private state: InstallState = 'idle';
   private targetDir: string | null = null;
+  private branch: string | null = null;
   private percent: number | null = null;
   private error: string | null = null;
   private startedAt: number | null = null;
@@ -84,6 +87,7 @@ export class InstallService extends EventEmitter {
     return {
       state: this.state,
       targetDir: this.targetDir,
+      branch: this.branch,
       percent: this.percent,
       error: this.error,
       startedAt: this.startedAt,
@@ -104,10 +108,11 @@ export class InstallService extends EventEmitter {
     );
   }
 
-  async start(targetDir: string): Promise<InstallSnapshot> {
+  async start(targetDir: string, branch: string | null = null): Promise<InstallSnapshot> {
     if (this.isBusy()) throw new Error(`install already in progress (${this.state})`);
     const absTarget = resolve(targetDir);
     this.targetDir = absTarget;
+    this.branch = branch && branch.trim().length > 0 ? branch.trim() : null;
     this.error = null;
     this.percent = null;
     this.startedAt = Date.now();
@@ -115,6 +120,7 @@ export class InstallService extends EventEmitter {
     this.logs.length = 0;
     this.nextLogId = 1;
     this.pushSys(`install target: ${absTarget}`);
+    this.pushSys(`steam branch: ${this.branch ?? '(default / stable)'}`);
 
     // Run async, do not await — the route returns immediately.
     this.runPipeline(absTarget).catch((err: Error) => {
@@ -166,8 +172,10 @@ export class InstallService extends EventEmitter {
       throw new Error(`PZ start script not found after install at ${startScript}`);
     }
 
-    // Persist the install dir so the PZ process service can find it.
+    // Persist the install dir and chosen branch so the PZ process service
+    // can find it and a later "Update" reuses the same branch by default.
     this.config.pzInstallDir = targetDir;
+    this.config.pzBranch = this.branch;
     persistConfig(this.config);
 
     this.finishedAt = Date.now();
@@ -209,6 +217,12 @@ export class InstallService extends EventEmitter {
   }
 
   private async runSteamcmd(steamcmdExe: string, installDir: string): Promise<void> {
+    // app_update accepts `-beta <branch>` (and optionally `-betapassword <pw>`)
+    // BEFORE the `validate` token, telling Steam to install the named beta
+    // instead of the default branch. Project Zomboid's B42 lives on the
+    // public "b42unstable" beta; the password-protected betas aren't
+    // supported here yet.
+    const branchArgs = this.branch ? ['-beta', this.branch] : [];
     const args = [
       '+force_install_dir',
       installDir,
@@ -216,6 +230,7 @@ export class InstallService extends EventEmitter {
       'anonymous',
       '+app_update',
       STEAM_APP_ID,
+      ...branchArgs,
       'validate',
       '+quit',
     ];

@@ -26,6 +26,8 @@ export interface AppConfig {
   pzInstallDir: string | null;
   /** Path to the user's Zomboid data directory (Server/, Saves/, Logs/, mods/) */
   pzUserDir: string | null;
+  /** Steam beta branch the install is pinned to (e.g. "b42unstable"). null = default branch (B41 stable). */
+  pzBranch: string | null;
   /** Name of the currently selected server profile */
   activeServer: string;
   /** Profile names the UI should expose even if no .ini exists yet */
@@ -38,6 +40,7 @@ interface PersistedConfig {
   authToken: string;
   pzInstallDir: string | null;
   pzUserDir: string | null;
+  pzBranch: string | null;
   activeServer: string;
   knownServers: string[];
   autoBackup: AutoBackupConfig;
@@ -47,6 +50,7 @@ interface PersistedConfigRaw {
   authToken: string;
   pzInstallDir: string | null;
   pzUserDir: string | null;
+  pzBranch?: string | null;
   activeServer?: string;
   knownServers?: string[];
   autoBackup?: Partial<AutoBackupConfig>;
@@ -74,6 +78,7 @@ function loadPersisted(dataDir: string): PersistedConfig {
       authToken: randomBytes(24).toString('hex'),
       pzInstallDir: null,
       pzUserDir: null,
+      pzBranch: null,
       activeServer: DEFAULT_SERVER,
       knownServers: [DEFAULT_SERVER],
       autoBackup: DEFAULT_AUTO_BACKUP,
@@ -87,6 +92,7 @@ function loadPersisted(dataDir: string): PersistedConfig {
     authToken: raw.authToken,
     pzInstallDir: raw.pzInstallDir,
     pzUserDir: raw.pzUserDir,
+    pzBranch: raw.pzBranch ?? null,
     activeServer: raw.activeServer ?? DEFAULT_SERVER,
     knownServers:
       raw.knownServers && raw.knownServers.length > 0
@@ -98,7 +104,8 @@ function loadPersisted(dataDir: string): PersistedConfig {
   if (
     raw.activeServer === undefined ||
     raw.knownServers === undefined ||
-    raw.autoBackup === undefined
+    raw.autoBackup === undefined ||
+    raw.pzBranch === undefined
   ) {
     writeFileSync(file, JSON.stringify(migrated, null, 2), 'utf8');
   }
@@ -111,6 +118,7 @@ export function persistConfig(cfg: AppConfig): void {
     authToken: cfg.authToken,
     pzInstallDir: cfg.pzInstallDir,
     pzUserDir: cfg.pzUserDir,
+    pzBranch: cfg.pzBranch,
     activeServer: cfg.activeServer,
     knownServers: cfg.knownServers,
     autoBackup: cfg.autoBackup,
@@ -128,6 +136,7 @@ export function loadConfig(): AppConfig {
     dataDir,
     pzInstallDir: persisted.pzInstallDir,
     pzUserDir: persisted.pzUserDir,
+    pzBranch: persisted.pzBranch,
     activeServer: persisted.activeServer,
     knownServers: persisted.knownServers,
     autoBackup: persisted.autoBackup,

@@ -27,11 +27,13 @@ interface InstallLog {
 interface InstallStatus {
   state: InstallState;
   targetDir: string | null;
+  branch: string | null;
   percent: number | null;
   error: string | null;
   startedAt: number | null;
   finishedAt: number | null;
   suggestedDir: string;
+  persistedBranch?: string | null;
 }
 
 type InstallEvent =
@@ -60,6 +62,7 @@ export function Install(): JSX.Element {
   const [status, setStatus] = useState<InstallStatus | null>(null);
   const [logs, setLogs] = useState<InstallLog[]>([]);
   const [targetDir, setTargetDir] = useState('');
+  const [branch, setBranch] = useState('');
   const logBoxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -68,6 +71,11 @@ export function Install(): JSX.Element {
       if (!targetDir) {
         setTargetDir(initial.data.targetDir ?? initial.data.suggestedDir);
       }
+      // Pre-fill the branch field from the persisted choice if any (or from
+      // the current install snapshot), so an existing install isn't silently
+      // re-pointed at the default branch on the next Update.
+      const lastBranch = initial.data.branch ?? initial.data.persistedBranch ?? '';
+      if (lastBranch) setBranch(lastBranch);
     }
   }, [initial.data, status, targetDir]);
 
@@ -130,7 +138,7 @@ export function Install(): JSX.Element {
     mutationFn: () =>
       api<InstallStatus>('/api/install/start', {
         method: 'POST',
-        body: JSON.stringify({ targetDir }),
+        body: JSON.stringify({ targetDir, branch: branch.trim() || null }),
       }),
   });
   const cancel = useMutation({
@@ -172,6 +180,46 @@ export function Install(): JSX.Element {
             />
           </div>
 
+          <div className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              Steam beta branch (leave empty for the default = Build 41 stable)
+            </label>
+            <div className="flex items-center gap-2">
+              <Input
+                value={branch}
+                onChange={(e) => setBranch(e.target.value)}
+                disabled={isBusy}
+                placeholder="e.g. b42unstable"
+                className="font-mono"
+                maxLength={64}
+              />
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isBusy}
+                onClick={() => setBranch('')}
+                title="Default branch (Build 41 stable)"
+              >
+                B41
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={isBusy}
+                onClick={() => setBranch('b42unstable')}
+                title="Public B42 beta branch"
+              >
+                B42
+              </Button>
+            </div>
+            <p className="text-[11px] text-muted-foreground">
+              Switching branches re-downloads the entire server. Saves from one build are not
+              compatible with the other.
+            </p>
+          </div>
+
           <div className="flex flex-wrap items-center gap-2">
             <Button
               onClick={() => start.mutate()}
@@ -189,6 +237,7 @@ export function Install(): JSX.Element {
               <span className="inline-flex items-center text-sm text-primary">
                 <CheckCircle2 className="mr-1 h-4 w-4" />
                 Installed at {status?.targetDir}
+                {status?.branch ? ` (branch: ${status.branch})` : ' (default branch / B41)'}
               </span>
             )}
             {isErr && (
