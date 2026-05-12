@@ -6,6 +6,15 @@ export interface WorkshopMetadata {
   detectedModIds: string[];
   /** Map folder names heuristically extracted from "Map Folder:" lines */
   detectedMapFolders: string[];
+  /**
+   * Subset of detectedMapFolders that look like spawn-region modifiers rather
+   * than actual playable maps (e.g. "Many Spawns Louisville",
+   * "Anywhere But - Muldraugh", "Knox County Visitors"). PZ doesn't accept
+   * these in the server INI `Map=` list; the UI defaults them to unchecked
+   * so a user importing a collection doesn't accidentally fill `Map=` with
+   * non-maps that would log warnings at boot.
+   */
+  suspectedSpawnRegions: string[];
   /** Steam timestamp (epoch seconds) of the last update, if available */
   timeUpdated: number | null;
   /** File size in bytes, if available */
@@ -74,12 +83,14 @@ export async function fetchManyWorkshopMetadata(ids: string[]): Promise<Workshop
   for (const item of json?.response?.publishedfiledetails ?? []) {
     if (item.result !== 1 || !item.publishedfileid) continue;
     const description = item.description ?? '';
+    const mapFolders = extractMapFolders(description);
     out.push({
       workshopId: item.publishedfileid,
       title: item.title || '(untitled)',
       description,
       detectedModIds: extractModIds(description),
-      detectedMapFolders: extractMapFolders(description),
+      detectedMapFolders: mapFolders,
+      suspectedSpawnRegions: mapFolders.filter(looksLikeSpawnRegion),
       timeUpdated: typeof item.time_updated === 'number' ? item.time_updated : null,
       fileSize:
         typeof item.file_size === 'number'
@@ -161,6 +172,28 @@ function extractMapFolders(description: string): string[] {
     if (m[1]) out.add(m[1].trim());
   }
   return [...out];
+}
+
+/**
+ * Recognises folder names that mods declare as "Map Folder:" in their
+ * description but that are actually spawn-region payloads, not playable map
+ * tiles. Listing them in `Map=` makes PZ log "Unknown map" warnings at boot
+ * and serves no purpose — the spawn data is picked up automatically when the
+ * mod is in `Mods=`.
+ *
+ * Heuristic only: a few mod authors put real maps behind names that match
+ * these prefixes, so the UI still shows them — it just defaults them
+ * unchecked. Misses are fine; false positives just mean an extra click.
+ */
+export function looksLikeSpawnRegion(name: string): boolean {
+  const n = name.trim();
+  if (/^many\s+spawns\b/i.test(n)) return true;
+  if (/^anywhere\s+but\b/i.test(n)) return true;
+  if (/^knox\s+county\b/i.test(n)) return true;
+  if (/^one\s+per\b/i.test(n)) return true;
+  if (/^by\s+profession\b/i.test(n)) return true;
+  if (/\bspawn(s|ing|er|points?|regions?)?\b/i.test(n)) return true;
+  return false;
 }
 
 interface SteamDetailsResponse {
