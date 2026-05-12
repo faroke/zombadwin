@@ -64,7 +64,29 @@ function Ensure-Cached([string]$url, [string]$destZip, [string]$extractTo) {
   }
   if (-not (Test-Path $destZip)) {
     Write-Host "    downloading $url"
-    Invoke-WebRequest -Uri $url -OutFile $destZip -UseBasicParsing
+    # nssm.cc and nodejs.org both flake with intermittent 5xx — we hit a
+    # 503 from nssm.cc that wrecked a release build. Three retries with
+    # exponential backoff (10s, 20s, 40s = 70s worst case) absorb the
+    # typical brief CDN hiccup without burning the 25-min job budget.
+    $attempt = 0
+    $maxAttempts = 4
+    while ($true) {
+      $attempt++
+      try {
+        Invoke-WebRequest -Uri $url -OutFile $destZip -UseBasicParsing -TimeoutSec 60
+        break
+      } catch {
+        if ($attempt -ge $maxAttempts) {
+          throw "failed to download $url after $maxAttempts attempts: $($_.Exception.Message)"
+        }
+        $wait = [int]([Math]::Pow(2, $attempt) * 5)
+        Write-Host "    attempt $attempt failed ($($_.Exception.Message)); retrying in $wait s"
+        # Drop the partial file so the next attempt doesn't try to resume
+        # what may be a half-written / 0-byte stub.
+        if (Test-Path $destZip) { Remove-Item -Force $destZip }
+        Start-Sleep -Seconds $wait
+      }
+    }
   }
   New-Item -ItemType Directory -Force -Path $extractTo | Out-Null
   Expand-Archive -Path $destZip -DestinationPath $extractTo -Force
