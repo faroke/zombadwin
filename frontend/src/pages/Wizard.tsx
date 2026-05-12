@@ -94,7 +94,8 @@ export function Wizard(): JSX.Element {
 
       {step.id === 'build' && <BuildStep onDone={goNext} />}
       {step.id === 'difficulty' && <DifficultyStep onDone={goNext} />}
-      {step.id !== 'build' && step.id !== 'difficulty' && (
+      {step.id === 'mods' && <ModsStep onDone={goNext} />}
+      {step.id !== 'build' && step.id !== 'difficulty' && step.id !== 'mods' && (
         <Card>
           <CardContent className="p-6">
             <p className="text-sm text-muted-foreground">
@@ -586,6 +587,328 @@ function DifficultyStep({ onDone }: { onDone: () => void }): JSX.Element {
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// -- Step 3: Mods ----------------------------------------------------------
+
+interface WorkshopMetadata {
+  workshopId: string;
+  title: string;
+  description: string;
+  detectedModIds: string[];
+  detectedMapFolders: string[];
+  /** Subset of detectedMapFolders the backend flagged as likely spawn-region
+   * artifacts ("Many Spawns Louisville", "Anywhere But - Muldraugh", …). The
+   * UI defaults these to unchecked. */
+  suspectedSpawnRegions: string[];
+  timeUpdated: number | null;
+  fileSize: number | null;
+  isCollection: boolean;
+}
+
+interface ResolveResponse {
+  ok: true;
+  items: WorkshopMetadata[];
+  parentCollection: { workshopId: string; title: string } | null;
+}
+
+interface ModsResponse {
+  path: string;
+  serverName: string;
+  workshopItems: string[];
+  mods: string[];
+  map: string[];
+}
+
+interface DownloadItem {
+  workshopId: string;
+  ok: boolean;
+  status: string;
+}
+interface DownloadResponse {
+  exitCode: number;
+  stdout: string;
+  stderr: string;
+  items: DownloadItem[];
+}
+
+function ModsStep({ onDone }: { onDone: () => void }): JSX.Element {
+  const qc = useQueryClient();
+  const current = useQuery({
+    queryKey: ['mods'],
+    queryFn: () => api<ModsResponse>('/api/mods'),
+    retry: false,
+  });
+
+  const [input, setInput] = useState('');
+  const [resolved, setResolved] = useState<ResolveResponse | null>(null);
+  // Map name → included flag. Initialized from heuristic when resolve completes.
+  const [mapSelection, setMapSelection] = useState<Record<string, boolean>>({});
+  const [downloadResult, setDownloadResult] = useState<DownloadResponse | null>(null);
+
+  const resolve = useMutation({
+    mutationFn: (raw: string) =>
+      api<ResolveResponse>('/api/mods/resolve', {
+        method: 'POST',
+        body: JSON.stringify({ input: raw }),
+      }),
+    onSuccess: (data) => {
+      setResolved(data);
+      const next: Record<string, boolean> = {};
+      for (const it of data.items) {
+        const sus = new Set(it.suspectedSpawnRegions);
+        for (const m of it.detectedMapFolders) {
+          // Same map can appear in multiple items; keep "true" if any item
+          // doesn't flag it as suspect — gentlest default.
+          if (!(m in next)) next[m] = !sus.has(m);
+          else next[m] = next[m] || !sus.has(m);
+        }
+      }
+      setMapSelection(next);
+    },
+  });
+
+  const apply = useMutation({
+    mutationFn: async (): Promise<{ download: DownloadResponse }> => {
+      if (!resolved) throw new Error('nothing resolved');
+      const workshopItems = resolved.items.map((i) => i.workshopId);
+      // Dedupe mods, preserve collection order.
+      const modSet = new Set<string>();
+      const mods: string[] = [];
+      for (const it of resolved.items) {
+        for (const m of it.detectedModIds) {
+          if (!modSet.has(m)) {
+            modSet.add(m);
+            mods.push(m);
+          }
+        }
+      }
+      const map = Object.entries(mapSelection)
+        .filter(([, v]) => v)
+        .map(([k]) => k);
+      // PZ loads Map= entries first-to-last on top of one another; the vanilla
+      // map must come last. If the user kept Muldraugh, KY in the list, leave
+      // its position; otherwise append it as the floor.
+      if (!map.includes('Muldraugh, KY')) map.push('Muldraugh, KY');
+      await api('/api/mods', {
+        method: 'PUT',
+        body: JSON.stringify({ workshopItems, mods, map }),
+      });
+      const download = await api<DownloadResponse>('/api/mods/download', {
+        method: 'POST',
+      });
+      return { download };
+    },
+    onSuccess: ({ download }) => {
+      setDownloadResult(download);
+      void qc.invalidateQueries({ queryKey: ['mods'] });
+    },
+  });
+
+  const noInstallYet =
+    current.error && /not_found|install_not_configured/.test(apiErrorMessage(current.error));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Mods</CardTitle>
+        <CardDescription>
+          Paste a Steam Workshop collection or single-mod URL. Resolve fetches the children, runs
+          the curation heuristic on detected map folders (Many Spawns / Anywhere But / Knox County
+          variants default to unchecked), and Apply writes WorkshopItems + Mods + Map to the active
+          server's INI and runs SteamCMD downloads. Leave blank to skip mods entirely.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {noInstallYet && (
+          <p className="text-xs text-destructive">
+            INI not found yet — start the server once from the Profiles page (or finish Build), so
+            the active server profile creates its{' '}
+            <code className="px-1">&lt;server&gt;.ini</code>.
+          </p>
+        )}
+
+        <div className="flex items-center gap-2">
+          <Input
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            placeholder="https://steamcommunity.com/sharedfiles/filedetails/?id=…"
+            className="font-mono"
+            maxLength={500}
+          />
+          <Button
+            type="button"
+            onClick={() => resolve.mutate(input.trim())}
+            disabled={!input.trim() || resolve.isPending}
+          >
+            {resolve.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Resolving…
+              </>
+            ) : (
+              'Resolve'
+            )}
+          </Button>
+        </div>
+        {resolve.error && (
+          <p className="text-xs text-destructive">{apiErrorMessage(resolve.error)}</p>
+        )}
+
+        {resolved && <ResolvedSummary
+          resolved={resolved}
+          mapSelection={mapSelection}
+          onMapToggle={(name) =>
+            setMapSelection((s) => ({ ...s, [name]: !s[name] }))
+          }
+        />}
+
+        <div className="flex flex-wrap items-center gap-2">
+          {resolved && (
+            <Button onClick={() => apply.mutate()} disabled={apply.isPending}>
+              {apply.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Writing + downloading…
+                </>
+              ) : (
+                <>Apply &amp; download</>
+              )}
+            </Button>
+          )}
+          <Button variant="outline" onClick={onDone}>
+            Skip mods <ChevronRight className="ml-1 h-4 w-4" />
+          </Button>
+          {downloadResult && (
+            <Button variant="default" onClick={onDone}>
+              Continue <ChevronRight className="ml-1 h-4 w-4" />
+            </Button>
+          )}
+        </div>
+
+        {apply.error && (
+          <p className="text-xs text-destructive">{apiErrorMessage(apply.error)}</p>
+        )}
+        {downloadResult && <DownloadSummary result={downloadResult} />}
+      </CardContent>
+    </Card>
+  );
+}
+
+function ResolvedSummary({
+  resolved,
+  mapSelection,
+  onMapToggle,
+}: {
+  resolved: ResolveResponse;
+  mapSelection: Record<string, boolean>;
+  onMapToggle: (name: string) => void;
+}): JSX.Element {
+  const itemCount = resolved.items.length;
+  const modSet = new Set(resolved.items.flatMap((i) => i.detectedModIds));
+  const allMaps = Array.from(
+    new Set(resolved.items.flatMap((i) => i.detectedMapFolders)),
+  ).sort((a, b) => a.localeCompare(b));
+  const suspectMaps = new Set(
+    resolved.items.flatMap((i) => i.suspectedSpawnRegions),
+  );
+  const itemsMissingModId = resolved.items
+    .filter((i) => i.detectedModIds.length === 0)
+    .map((i) => i.title);
+
+  return (
+    <div className="space-y-3 rounded-md border bg-secondary/30 p-3 text-sm">
+      <div>
+        {resolved.parentCollection ? (
+          <>
+            <span className="font-semibold">{resolved.parentCollection.title}</span>{' '}
+            <span className="text-xs text-muted-foreground">
+              collection #{resolved.parentCollection.workshopId}
+            </span>
+          </>
+        ) : (
+          <span className="font-semibold">{resolved.items[0]?.title ?? '(empty)'}</span>
+        )}
+      </div>
+      <div className="text-xs text-muted-foreground">
+        {itemCount} workshop {itemCount === 1 ? 'item' : 'items'} · {modSet.size} mod{' '}
+        {modSet.size === 1 ? 'ID' : 'IDs'} · {allMaps.length} detected map{' '}
+        {allMaps.length === 1 ? 'folder' : 'folders'} ({suspectMaps.size} flagged as suspect)
+      </div>
+
+      {itemsMissingModId.length > 0 && (
+        <div className="text-[11px] text-amber-600 dark:text-amber-400">
+          {itemsMissingModId.length}{' '}
+          {itemsMissingModId.length === 1 ? 'item has' : 'items have'} no Mod ID in their
+          description. They'll still be downloaded; you may need to add Mod IDs manually from each
+          mod's <code>mod.info</code> after download — check the Mods page.
+        </div>
+      )}
+
+      {allMaps.length > 0 && (
+        <div>
+          <div className="mb-1 text-xs font-medium">Map folders (uncheck non-maps)</div>
+          <div className="flex flex-wrap gap-1">
+            {allMaps.map((name) => {
+              const sel = mapSelection[name] ?? !suspectMaps.has(name);
+              const suspect = suspectMaps.has(name);
+              return (
+                <button
+                  key={name}
+                  type="button"
+                  onClick={() => onMapToggle(name)}
+                  className={cn(
+                    'rounded-md border px-2 py-0.5 font-mono text-xs',
+                    sel
+                      ? suspect
+                        ? 'border-amber-500 bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                        : 'border-primary bg-primary/15 text-primary'
+                      : 'border-input text-muted-foreground hover:text-foreground',
+                  )}
+                  title={
+                    suspect
+                      ? 'Heuristically flagged as a spawn-region payload, not a real map'
+                      : ''
+                  }
+                >
+                  {name}
+                  {suspect && <span className="ml-1 text-[10px] opacity-75">?</span>}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DownloadSummary({ result }: { result: DownloadResponse }): JSX.Element {
+  const ok = result.items.filter((i) => i.ok).length;
+  const fail = result.items.length - ok;
+  return (
+    <div className="rounded-md border bg-secondary/30 p-3 text-xs">
+      <div className="flex items-center gap-2">
+        <CheckCircle2 className="h-4 w-4 text-primary" />
+        <span>
+          {ok} downloaded, {fail} failed (SteamCMD exit {result.exitCode}).
+        </span>
+      </div>
+      {fail > 0 && (
+        <ul className="mt-2 space-y-0.5 font-mono">
+          {result.items
+            .filter((i) => !i.ok)
+            .slice(0, 5)
+            .map((i) => (
+              <li key={i.workshopId} className="text-destructive">
+                {i.workshopId}: {i.status}
+              </li>
+            ))}
+          {fail > 5 && (
+            <li className="text-muted-foreground">…and {fail - 5} more — check Mods page.</li>
+          )}
+        </ul>
+      )}
+    </div>
   );
 }
 
