@@ -68,9 +68,28 @@ const STEPS: Array<{ id: StepId; label: string }> = [
   { id: 'recap', label: 'Recap' },
 ];
 
+interface WizardTemplate {
+  id: string;
+  label: string;
+  description: string;
+  branch: string;
+  difficultyPreset: string;
+  collectionUrl: string | null;
+  ini: Record<string, string>;
+}
+interface TemplatesResponse {
+  templates: WizardTemplate[];
+}
+
 export function Wizard(): JSX.Element {
   const [stepIdx, setStepIdx] = useState(0);
+  const [tpl, setTpl] = useState<WizardTemplate | null>(null);
   const step = STEPS[stepIdx]!;
+  const tplsQuery = useQuery({
+    queryKey: ['wizard-templates'],
+    queryFn: () => api<TemplatesResponse>('/api/wizard/templates'),
+    staleTime: 60_000,
+  });
 
   function goNext(): void {
     setStepIdx((i) => Math.min(STEPS.length - 1, i + 1));
@@ -90,12 +109,44 @@ export function Wizard(): JSX.Element {
         </p>
       </header>
 
+      <TemplateChooser
+        templates={tplsQuery.data?.templates ?? []}
+        selectedId={tpl?.id ?? null}
+        onSelect={(t) => {
+          // Remount the active step (key change below) so its useState
+          // initializers re-read the new template's initial values instead of
+          // stale local state from the previous selection.
+          setTpl(t);
+          setStepIdx(0);
+        }}
+      />
+
       <Stepper currentIdx={stepIdx} />
 
-      {step.id === 'build' && <BuildStep onDone={goNext} />}
-      {step.id === 'difficulty' && <DifficultyStep onDone={goNext} />}
-      {step.id === 'mods' && <ModsStep onDone={goNext} />}
-      {step.id === 'network' && <NetworkStep onDone={goNext} />}
+      {step.id === 'build' && (
+        <BuildStep key={`build-${tpl?.id ?? 'none'}`} onDone={goNext} initialBranch={tpl?.branch} />
+      )}
+      {step.id === 'difficulty' && (
+        <DifficultyStep
+          key={`diff-${tpl?.id ?? 'none'}`}
+          onDone={goNext}
+          initialPreset={tpl?.difficultyPreset}
+        />
+      )}
+      {step.id === 'mods' && (
+        <ModsStep
+          key={`mods-${tpl?.id ?? 'none'}`}
+          onDone={goNext}
+          initialUrl={tpl?.collectionUrl ?? ''}
+        />
+      )}
+      {step.id === 'network' && (
+        <NetworkStep
+          key={`net-${tpl?.id ?? 'none'}`}
+          onDone={goNext}
+          iniOverrides={tpl?.ini ?? {}}
+        />
+      )}
       {step.id === 'recap' && <RecapStep />}
 
       <div className="flex justify-between">
@@ -105,6 +156,55 @@ export function Wizard(): JSX.Element {
         <Button variant="outline" onClick={goNext} disabled={stepIdx === STEPS.length - 1}>
           Skip step <ChevronRight className="ml-1 h-4 w-4" />
         </Button>
+      </div>
+    </div>
+  );
+}
+
+function TemplateChooser({
+  templates,
+  selectedId,
+  onSelect,
+}: {
+  templates: WizardTemplate[];
+  selectedId: string | null;
+  onSelect: (t: WizardTemplate | null) => void;
+}): JSX.Element | null {
+  if (templates.length === 0) return null;
+  return (
+    <div>
+      <div className="mb-1 text-xs font-medium text-muted-foreground">Start from a template</div>
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => onSelect(null)}
+          className={cn(
+            'rounded-md border px-3 py-2 text-left text-xs',
+            selectedId === null
+              ? 'border-primary bg-primary/10 text-foreground'
+              : 'border-input hover:bg-accent/50',
+          )}
+        >
+          <span className="font-semibold">Custom</span>
+          <span className="ml-1 text-muted-foreground">— pick every option yourself</span>
+        </button>
+        {templates.map((t) => (
+          <button
+            key={t.id}
+            type="button"
+            onClick={() => onSelect(t)}
+            className={cn(
+              'rounded-md border px-3 py-2 text-left text-xs',
+              selectedId === t.id
+                ? 'border-primary bg-primary/10 text-foreground'
+                : 'border-input hover:bg-accent/50',
+            )}
+            title={t.description}
+          >
+            <span className="font-semibold">{t.label}</span>
+            <span className="ml-1 text-muted-foreground">— {truncate(t.description, 60)}</span>
+          </button>
+        ))}
       </div>
     </div>
   );
@@ -138,7 +238,13 @@ function Stepper({ currentIdx }: { currentIdx: number }): JSX.Element {
 
 // -- Step 1: Build ----------------------------------------------------------
 
-function BuildStep({ onDone }: { onDone: () => void }): JSX.Element {
+function BuildStep({
+  onDone,
+  initialBranch,
+}: {
+  onDone: () => void;
+  initialBranch?: string;
+}): JSX.Element {
   const qc = useQueryClient();
   const initial = useQuery({
     queryKey: ['install-status'],
@@ -157,19 +263,22 @@ function BuildStep({ onDone }: { onDone: () => void }): JSX.Element {
   const [status, setStatus] = useState<InstallStatus | null>(null);
   const [logs, setLogs] = useState<InstallLog[]>([]);
   const [targetDir, setTargetDir] = useState('');
-  const [branch, setBranch] = useState('');
+  // Templates win over the persisted branch — picking a template is an
+  // explicit override, while the persisted branch is just "last time".
+  const [branch, setBranch] = useState(initialBranch ?? '');
   const logBoxRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (initial.data && !status) {
       setStatus(initial.data);
       setTargetDir(initial.data.targetDir ?? initial.data.suggestedDir);
-      // Pre-fill from persistedBranch so an existing install isn't silently
-      // re-pointed at the default branch on the next Update.
-      const lastBranch = initial.data.branch ?? initial.data.persistedBranch ?? '';
-      if (lastBranch) setBranch(lastBranch);
+      if (initialBranch === undefined) {
+        // No template override — fall back to the persisted choice.
+        const lastBranch = initial.data.branch ?? initial.data.persistedBranch ?? '';
+        if (lastBranch) setBranch(lastBranch);
+      }
     }
-  }, [initial.data, status]);
+  }, [initial.data, status, initialBranch]);
 
   // Live updates from /ws/install.
   useEffect(() => {
@@ -472,12 +581,18 @@ interface ApplyPresetResponse {
   serverName: string;
 }
 
-function DifficultyStep({ onDone }: { onDone: () => void }): JSX.Element {
+function DifficultyStep({
+  onDone,
+  initialPreset,
+}: {
+  onDone: () => void;
+  initialPreset?: string;
+}): JSX.Element {
   const presetsQuery = useQuery({
     queryKey: ['sandbox-presets'],
     queryFn: () => api<PresetsResponse>('/api/config/sandbox/presets'),
   });
-  const [preset, setPreset] = useState<string>('');
+  const [preset, setPreset] = useState<string>(initialPreset ?? '');
   const [confirmOverwrite, setConfirmOverwrite] = useState(false);
   const [lastResult, setLastResult] = useState<ApplyPresetResponse | null>(null);
 
@@ -626,7 +741,13 @@ interface DownloadResponse {
   items: DownloadItem[];
 }
 
-function ModsStep({ onDone }: { onDone: () => void }): JSX.Element {
+function ModsStep({
+  onDone,
+  initialUrl,
+}: {
+  onDone: () => void;
+  initialUrl?: string;
+}): JSX.Element {
   const qc = useQueryClient();
   const current = useQuery({
     queryKey: ['mods'],
@@ -634,7 +755,7 @@ function ModsStep({ onDone }: { onDone: () => void }): JSX.Element {
     retry: false,
   });
 
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(initialUrl ?? '');
   const [resolved, setResolved] = useState<ResolveResponse | null>(null);
   // Map name → included flag. Initialized from heuristic when resolve completes.
   const [mapSelection, setMapSelection] = useState<Record<string, boolean>>({});
@@ -962,14 +1083,22 @@ const NETWORK_FIELDS: Array<{ key: string; label: string; placeholder?: string; 
   },
 ];
 
-function NetworkStep({ onDone }: { onDone: () => void }): JSX.Element {
+function NetworkStep({
+  onDone,
+  iniOverrides,
+}: {
+  onDone: () => void;
+  iniOverrides?: Record<string, string>;
+}): JSX.Element {
   const qc = useQueryClient();
   const ini = useQuery({
     queryKey: ['ini'],
     queryFn: () => api<IniResponse>('/api/config/ini'),
     retry: false,
   });
-  const [edits, setEdits] = useState<Record<string, string>>({});
+  // Template overrides start in `edits` so the user sees them pre-filled and
+  // can adjust before saving. Empty initial → preserves current INI as-is.
+  const [edits, setEdits] = useState<Record<string, string>>(iniOverrides ?? {});
   const [saved, setSaved] = useState(false);
 
   const save = useMutation({

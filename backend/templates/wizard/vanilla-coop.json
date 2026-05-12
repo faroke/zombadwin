@@ -1,0 +1,15 @@
+{
+  "id": "vanilla-coop",
+  "label": "Vanilla coop",
+  "description": "Default branch, Apocalypse difficulty, no mods. Sized for a small group of friends.",
+  "branch": "",
+  "difficultyPreset": "Apocalypse",
+  "collectionUrl": null,
+  "ini": {
+    "PublicName": "Vanilla coop",
+    "MaxPlayers": "8",
+    "Open": "true",
+    "Public": "false",
+    "PauseEmpty": "true"
+  }
+}

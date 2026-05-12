@@ -1,0 +1,16 @@
+{
+  "id": "modded-apoc",
+  "label": "Modded Apocalypse",
+  "description": "Default branch, Apocalypse difficulty, with a collection URL pre-filled so you can swap in your own. Resize MaxPlayers in Network step.",
+  "branch": "",
+  "difficultyPreset": "Apocalypse",
+  "collectionUrl": "https://steamcommunity.com/sharedfiles/filedetails/?id=3724342596",
+  "ini": {
+    "PublicName": "Modded Apocalypse",
+    "MaxPlayers": "16",
+    "Open": "true",
+    "Public": "false",
+    "PauseEmpty": "true",
+    "DoLuaChecksum": "true"
+  }
+}

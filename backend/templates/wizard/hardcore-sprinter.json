@@ -1,0 +1,17 @@
+{
+  "id": "hardcore-sprinter",
+  "label": "Hardcore sprinter",
+  "description": "Latest unstable branch (B42 work), Extinction preset (sprinters + extreme density), no mods. Bring friends.",
+  "branch": "unstable",
+  "difficultyPreset": "Extinction",
+  "collectionUrl": null,
+  "ini": {
+    "PublicName": "Hardcore sprinter",
+    "MaxPlayers": "8",
+    "Open": "true",
+    "Public": "false",
+    "PauseEmpty": "false",
+    "AnnounceDeath": "true",
+    "PVP": "false"
+  }
+}

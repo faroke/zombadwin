@@ -15,6 +15,7 @@ import { registerPlayerRoutes } from './routes/players.js';
 import { registerSaveRoutes } from './routes/saves.js';
 import { registerServerRoutes } from './routes/server.js';
 import { registerServerProfileRoutes } from './routes/servers.js';
+import { registerWizardRoutes } from './routes/wizard.js';
 import { initAutoBackup } from './services/autoBackup.js';
 import { initPzProcess } from './services/pzProcess.js';
 import { initInstallService } from './services/steamcmd.js';
@@ -65,6 +66,7 @@ async function main(): Promise<void> {
   await registerModRoutes(app);
   await registerServerProfileRoutes(app);
   await registerSaveRoutes(app);
+  await registerWizardRoutes(app);
   await registerLogsSocket(app, config);
   await registerInstallSocket(app, config);
 
