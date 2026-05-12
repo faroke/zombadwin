@@ -1,11 +1,14 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  ArrowDownToLine,
+  ArrowUpFromLine,
   Cpu,
   Database,
   Gauge,
   HardDrive,
   Save,
   Server as ServerIcon,
+  TrendingUp,
   Users,
   Zap,
 } from 'lucide-react';
@@ -43,6 +46,12 @@ interface MonitoringSnapshot {
     saveDirSizeBytes: number | null;
     saveDirError: string | null;
   };
+  diskIo: {
+    readBytesPerSec: number | null;
+    writeBytesPerSec: number | null;
+    activePercent: number | null;
+    error: string | null;
+  };
   players: {
     count: number | null;
     queriedAt: number | null;
@@ -59,6 +68,9 @@ interface SeriesPoint {
   pzCpu: number | null;
   diskFree: number | null;
   saveSize: number | null;
+  diskRead: number | null;
+  diskWrite: number | null;
+  diskActive: number | null;
   players: number | null;
 }
 
@@ -84,6 +96,9 @@ export function Monitoring(): JSX.Element {
       pzCpu: s.pz.cpuPercent,
       diskFree: s.disk.installDirFreeBytes,
       saveSize: s.disk.saveDirSizeBytes,
+      diskRead: s.diskIo.readBytesPerSec,
+      diskWrite: s.diskIo.writeBytesPerSec,
+      diskActive: s.diskIo.activePercent,
       players: s.players.count,
     };
     seriesRef.current = [...seriesRef.current.slice(-(HISTORY_LENGTH - 1)), point];
@@ -211,6 +226,61 @@ export function Monitoring(): JSX.Element {
           subtitle={snap?.disk.saveDirError ? `error: ${snap.disk.saveDirError.slice(0, 60)}` : undefined}
           values={seriesNumbersOrZero(series.map((p) => p.saveSize))}
           formatY={formatBytes}
+        />
+        <MetricCard
+          icon={ArrowDownToLine}
+          title="Disk read"
+          description={
+            snap?.diskIo.error
+              ? `error: ${snap.diskIo.error.slice(0, 60)}`
+              : 'across every physical disk on the host'
+          }
+          value={
+            snap?.diskIo.readBytesPerSec != null
+              ? `${formatBytes(snap.diskIo.readBytesPerSec)}/s`
+              : '—'
+          }
+          values={seriesNumbersOrZero(series.map((p) => p.diskRead))}
+          formatY={(v) => `${formatBytes(v)}/s`}
+        />
+        <MetricCard
+          icon={ArrowUpFromLine}
+          title="Disk write"
+          description={
+            snap?.diskIo.error
+              ? `error: ${snap.diskIo.error.slice(0, 60)}`
+              : 'across every physical disk on the host'
+          }
+          value={
+            snap?.diskIo.writeBytesPerSec != null
+              ? `${formatBytes(snap.diskIo.writeBytesPerSec)}/s`
+              : '—'
+          }
+          values={seriesNumbersOrZero(series.map((p) => p.diskWrite))}
+          formatY={(v) => `${formatBytes(v)}/s`}
+        />
+        <MetricCard
+          icon={TrendingUp}
+          title="Disk activity"
+          description={
+            snap?.diskIo.activePercent != null && snap.diskIo.activePercent > 100
+              ? 'queue saturated across multiple spindles'
+              : 'PerfMon % Disk Time, _Total instance'
+          }
+          value={
+            snap?.diskIo.activePercent != null
+              ? `${snap.diskIo.activePercent.toFixed(0)}%`
+              : '—'
+          }
+          values={seriesNumbersOrZero(series.map((p) => p.diskActive))}
+          // Soft-clamp the axis at 100% but allow it to grow if a sample
+          // exceeds it, so spikes stay visible without compressing normal
+          // activity.
+          max={Math.max(
+            100,
+            ...series.map((p) => (p.diskActive == null ? 0 : p.diskActive)),
+          )}
+          formatY={(v) => `${v.toFixed(0)}%`}
         />
         <MetricCard
           icon={Users}
