@@ -16,6 +16,7 @@ import { registerPlayerRoutes } from './routes/players.js';
 import { registerSaveRoutes } from './routes/saves.js';
 import { registerServerRoutes } from './routes/server.js';
 import { registerServerProfileRoutes } from './routes/servers.js';
+import { registerUpdateRoutes } from './routes/updates.js';
 import { registerWizardRoutes } from './routes/wizard.js';
 import { initAutoBackup } from './services/autoBackup.js';
 import { initPzProcess } from './services/pzProcess.js';
@@ -69,6 +70,7 @@ async function main(): Promise<void> {
   await registerSaveRoutes(app);
   await registerWizardRoutes(app);
   await registerMonitoringRoutes(app);
+  await registerUpdateRoutes(app);
   await registerLogsSocket(app, config);
   await registerInstallSocket(app, config);
 
