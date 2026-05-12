@@ -33,6 +33,17 @@ export interface MonitoringSnapshot {
     saveDirSizeBytes: number | null;
     saveDirError: string | null;
   };
+  diskIo: {
+    /** Aggregate read throughput across all physical disks, in bytes/sec. */
+    readBytesPerSec: number | null;
+    /** Aggregate write throughput across all physical disks, in bytes/sec. */
+    writeBytesPerSec: number | null;
+    /** PerfMon "% Disk Time" on _Total. >100% means the queue is saturated
+     *  across multiple spindles — we don't clamp because the raw counter is
+     *  what's useful for diagnosing thrash. */
+    activePercent: number | null;
+    error: string | null;
+  };
   players: {
     count: number | null;
     queriedAt: number | null;
@@ -43,6 +54,7 @@ export interface MonitoringSnapshot {
 const SAVE_SIZE_CACHE_MS = 30_000;
 const PLAYER_CACHE_MS = 15_000;
 const PZ_SAMPLE_TIMEOUT_MS = 1500;
+const DISK_IO_SAMPLE_TIMEOUT_MS = 1500;
 
 interface PzCpuSample {
   /** PZ process pid this sample is for — discarded if pid changes. */
@@ -65,6 +77,16 @@ interface PlayerCache {
   queriedAt: number;
 }
 
+interface DiskIoSample {
+  /** Sum of `sectors read` * 512 across every block device in /proc/diskstats. */
+  readBytesCumulative: number;
+  /** Sum of `sectors written` * 512. */
+  writeBytesCumulative: number;
+  /** Sum of `time spent doing I/Os, ms`. */
+  ioActiveMs: number;
+  sampledAtMs: number;
+}
+
 class MonitoringService {
   /** Previous os.cpus() reading — needed to compute % between snapshots. */
   private lastCpus: CpuInfo[] | null = null;
@@ -74,6 +96,9 @@ class MonitoringService {
   /** Prevents re-entrant player queries from piling up if the previous one is
    * still waiting for PZ to reply. */
   private playerQueryInFlight: Promise<unknown> | null = null;
+  /** Previous /proc/diskstats reading (Linux only) — Windows uses Win32_Perf*
+   * which already returns delta-applied rates. */
+  private lastDiskIo: DiskIoSample | null = null;
 
   async snapshot(): Promise<MonitoringSnapshot> {
     const ts = Date.now();
@@ -85,10 +110,11 @@ class MonitoringService {
     // dir we care about is whichever profile is currently *active*.
     const serverName = status.state === 'stopped' ? cfg.activeServer : status.serverName;
 
-    const [host, pz, disk] = await Promise.all([
+    const [host, pz, disk, diskIo] = await Promise.all([
       this.sampleHost(),
       this.samplePz(status.pid),
       this.sampleDisk(cfg.pzInstallDir, userDir, serverName),
+      this.sampleDiskIo(),
     ]);
 
     return {
@@ -96,6 +122,7 @@ class MonitoringService {
       host,
       pz: { ...pz, state: status.state, uptimeSeconds: pzUptimeSeconds(status.startedAt) },
       disk,
+      diskIo,
       players: this.samplePlayers(status.state),
     };
   }
@@ -221,6 +248,68 @@ class MonitoringService {
       saveDir,
       saveDirSizeBytes,
       saveDirError,
+    };
+  }
+
+  // -- Disk I/O ------------------------------------------------------------
+
+  private async sampleDiskIo(): Promise<MonitoringSnapshot['diskIo']> {
+    try {
+      if (platform() === 'win32') {
+        return await sampleDiskIoWindows();
+      }
+      return this.sampleDiskIoLinux();
+    } catch (err) {
+      return {
+        readBytesPerSec: null,
+        writeBytesPerSec: null,
+        activePercent: null,
+        error: (err as Error).message,
+      };
+    }
+  }
+
+  private async sampleDiskIoLinux(): Promise<MonitoringSnapshot['diskIo']> {
+    const { readFile } = await import('node:fs/promises');
+    const raw = await readFile('/proc/diskstats', 'utf8');
+    let readSectors = 0;
+    let writeSectors = 0;
+    let ioMs = 0;
+    for (const line of raw.split('\n')) {
+      const fields = line.trim().split(/\s+/);
+      if (fields.length < 14) continue;
+      const dev = fields[2] ?? '';
+      // Skip per-partition entries (sda1, sdb2, …); keep whole-disk only.
+      // The kernel exposes both — counting both would double the totals.
+      if (/\d+$/.test(dev) && !/^nvme\d+n\d+$/.test(dev)) continue;
+      readSectors += Number(fields[5] ?? 0);
+      writeSectors += Number(fields[9] ?? 0);
+      ioMs += Number(fields[12] ?? 0);
+    }
+    const sectorSize = 512;
+    const now = Date.now();
+    const sample: DiskIoSample = {
+      readBytesCumulative: readSectors * sectorSize,
+      writeBytesCumulative: writeSectors * sectorSize,
+      ioActiveMs: ioMs,
+      sampledAtMs: now,
+    };
+    const prev = this.lastDiskIo;
+    this.lastDiskIo = sample;
+    if (!prev) {
+      // First reading — return zeros instead of null so the line starts
+      // somewhere; the next sample will produce a real rate.
+      return { readBytesPerSec: 0, writeBytesPerSec: 0, activePercent: 0, error: null };
+    }
+    const wallDelta = sample.sampledAtMs - prev.sampledAtMs;
+    if (wallDelta <= 0) {
+      return { readBytesPerSec: 0, writeBytesPerSec: 0, activePercent: 0, error: null };
+    }
+    return {
+      readBytesPerSec: ((sample.readBytesCumulative - prev.readBytesCumulative) * 1000) / wallDelta,
+      writeBytesPerSec: ((sample.writeBytesCumulative - prev.writeBytesCumulative) * 1000) / wallDelta,
+      activePercent: ((sample.ioActiveMs - prev.ioActiveMs) / wallDelta) * 100,
+      error: null,
     };
   }
 
@@ -367,6 +456,60 @@ async function readPzProcessStatsLinux(pid: number): Promise<{ workingSetBytes: 
   const processorTimeMs = ((utime + stime) / clkTck) * 1000;
   const pageSize = 4096;
   return { workingSetBytes: rssPages * pageSize, processorTimeMs };
+}
+
+/**
+ * Reads aggregate disk I/O rates on Windows via the WMI performance counter
+ * for the synthetic `_Total` instance. `Win32_PerfFormattedData_PerfDisk_PhysicalDisk`
+ * returns values that are already delta-applied by the PDH (Performance Data
+ * Helper) layer — we don't have to keep prev-state ourselves, unlike Linux.
+ *
+ * Shells to PowerShell because Node has no stdlib WMI access. The call is fast
+ * (~80-150ms) since we don't ask Get-Counter for a sampling interval.
+ */
+function sampleDiskIoWindows(): Promise<MonitoringSnapshot['diskIo']> {
+  const script =
+    "Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter \"Name='_Total'\" | " +
+    'Select-Object -Property @{N=\'r\';E={[int64]$_.DiskReadBytesPerSec}},' +
+    '@{N=\'w\';E={[int64]$_.DiskWriteBytesPerSec}},' +
+    '@{N=\'a\';E={[int64]$_.PercentDiskTime}} | ConvertTo-Json -Compress';
+  return new Promise((resolvePromise, rejectPromise) => {
+    const proc = spawn(
+      'powershell.exe',
+      ['-NoProfile', '-NonInteractive', '-Command', script],
+      { windowsHide: true },
+    );
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => {
+      proc.kill();
+      rejectPromise(new Error('Win32_PerfFormattedData_PerfDisk_PhysicalDisk timed out'));
+    }, DISK_IO_SAMPLE_TIMEOUT_MS);
+    proc.stdout.on('data', (c) => { stdout += c.toString(); });
+    proc.stderr.on('data', (c) => { stderr += c.toString(); });
+    proc.on('error', (e) => {
+      clearTimeout(timer);
+      rejectPromise(e);
+    });
+    proc.on('exit', (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        rejectPromise(new Error(`disk-io perfcounter exit ${code}: ${stderr.trim().slice(0, 200)}`));
+        return;
+      }
+      try {
+        const parsed = JSON.parse(stdout.trim()) as { r: number; w: number; a: number };
+        resolvePromise({
+          readBytesPerSec: Number(parsed.r),
+          writeBytesPerSec: Number(parsed.w),
+          activePercent: Number(parsed.a),
+          error: null,
+        });
+      } catch (e) {
+        rejectPromise(new Error(`failed to parse perfcounter output: ${(e as Error).message}`));
+      }
+    });
+  });
 }
 
 let instance: MonitoringService | null = null;
