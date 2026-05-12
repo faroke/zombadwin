@@ -11,6 +11,7 @@ import { Mods } from '@/pages/Mods';
 import { Players } from '@/pages/Players';
 import { Saves } from '@/pages/Saves';
 import { Servers } from '@/pages/Servers';
+import { Wizard } from '@/pages/Wizard';
 
 export function App(): JSX.Element {
   const [authed, setAuthed] = useState<boolean>(() => getToken() !== null);
@@ -24,6 +25,7 @@ export function App(): JSX.Element {
       <Routes>
         <Route element={<Layout onLogout={() => setAuthed(false)} />}>
           <Route index element={<Dashboard />} />
+          <Route path="wizard" element={<Wizard />} />
           <Route path="console" element={<Console />} />
           <Route path="install" element={<Install />} />
           <Route path="config" element={<Config />} />

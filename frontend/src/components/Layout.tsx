@@ -7,6 +7,7 @@ import {
   LogOut,
   Package,
   Server as ServerIcon,
+  Sparkles,
   Terminal,
   Users,
 } from 'lucide-react';
@@ -22,6 +23,7 @@ interface LayoutProps {
 
 const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
+  { to: '/wizard', icon: Sparkles, label: 'Setup wizard' },
   { to: '/console', icon: Terminal, label: 'Console' },
   { to: '/servers', icon: ServerIcon, label: 'Profiles' },
   { to: '/install', icon: Download, label: 'Install' },
