@@ -58,7 +58,10 @@ const MENU_OPEN = 0;
 const MENU_STATUS = 1;
 const MENU_START = 2;
 const MENU_STOP = 3;
-const MENU_QUIT = 5;
+// MENU_*_SEP_1 = 4
+const MENU_UPDATE = 5;
+// MENU_*_SEP_2 = 6
+const MENU_QUIT = 7;
 
 const systray = new SysTray.default({
   menu: {
@@ -71,6 +74,8 @@ const systray = new SysTray.default({
       { title: 'Backend: checking…', tooltip: 'Updated every 5s', checked: false, enabled: false },
       { title: 'Start backend (this session)', tooltip: 'Spawn the backend in user context — dies when this tray exits', checked: false, enabled: false },
       { title: 'Stop backend (this session)', tooltip: 'Kill the backend we started; service-managed backend is unaffected', checked: false, enabled: false },
+      SysTray.default.separator,
+      { title: 'Checking for updates…', tooltip: 'Polls GitHub releases hourly', checked: false, enabled: false },
       SysTray.default.separator,
       { title: 'Quit tray', tooltip: 'Stops this tray icon (service keeps running)', checked: false, enabled: true },
     ],
@@ -92,6 +97,8 @@ systray.onClick((action) => {
     startBackend();
   } else if (action.seq_id === MENU_STOP) {
     stopBackend();
+  } else if (action.seq_id === MENU_UPDATE && lastUpdateUrl) {
+    exec(`start "" "${lastUpdateUrl}"`);
   } else if (action.seq_id === MENU_QUIT) {
     if (ownedBackend) stopBackend();
     systray.kill();
@@ -158,6 +165,54 @@ function stopBackend() {
 }
 
 let pollErrorContext = '';
+let lastUpdateUrl = null;
+let lastUpdateLatest = null;
+
+/**
+ * Asks the backend whether a newer release is published on GitHub. Pulls
+ * through the backend (rather than calling api.github.com directly) so the
+ * 1-hour result cache is shared with the admin UI and we don't double up on
+ * the 60-req/hour anonymous rate limit when both the tray and the UI poll.
+ *
+ * Silent on failure — if the backend is down or GitHub is unreachable, the
+ * menu item just stays "Checking for updates…" or whatever it last showed.
+ * Update polling is not a critical path; we don't surface transient errors.
+ */
+async function pollUpdates() {
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 5000);
+    const res = await fetch(`${URL_ROOT}/api/updates/check`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (!res.ok) return;
+    const data = await res.json();
+    if (data.newer && data.latest) {
+      // Only repaint when the latest version changed — keeps the systray
+      // helper from rewriting the menu on every poll for nothing.
+      if (data.latest !== lastUpdateLatest) {
+        lastUpdateLatest = data.latest;
+        lastUpdateUrl = data.releaseUrl ?? null;
+        setMenuItem(MENU_UPDATE, {
+          title: `✦ Update available: v${data.latest}`,
+          tooltip: data.releaseUrl
+            ? `Click to open ${data.releaseUrl}`
+            : 'Newer release published on GitHub',
+          enabled: !!data.releaseUrl,
+        });
+      }
+    } else if (data.current && lastUpdateLatest !== `current:${data.current}`) {
+      lastUpdateLatest = `current:${data.current}`;
+      lastUpdateUrl = null;
+      setMenuItem(MENU_UPDATE, {
+        title: `Up to date — v${data.current}`,
+        tooltip: 'Checked against the latest GitHub release',
+        enabled: false,
+      });
+    }
+  } catch {
+    /* network blip — leave the menu as it was */
+  }
+}
 
 async function pollBackend(contextHint = '') {
   if (contextHint) pollErrorContext = contextHint;
@@ -212,6 +267,12 @@ function setMenuItem(seq_id, item) {
 
 void pollBackend();
 setInterval(pollBackend, POLL_MS);
+// Updates: poll on startup (delayed so the backend has time to come up if
+// the tray launched alongside it), then every 15 min. Backend caches the
+// GitHub result for 1h, so the actual outbound API call happens at most
+// once per hour even if we poll more often.
+setTimeout(() => void pollUpdates(), 8000);
+setInterval(pollUpdates, 15 * 60 * 1000);
 
 // Graceful shutdown if Windows sends a stop signal (e.g. user logout).
 for (const sig of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
