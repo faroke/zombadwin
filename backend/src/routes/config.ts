@@ -19,6 +19,7 @@ import {
   type SandboxRecord,
   type SandboxValue,
 } from '../services/sandboxLua.js';
+import { applySandboxPreset, listSandboxPresets } from '../services/sandboxPresets.js';
 import { SANDBOX_CATEGORIES, SANDBOX_SCHEMA } from '../services/sandboxSchema.js';
 
 const PutIniBody = z.object({
@@ -30,6 +31,14 @@ const SandboxLeaf: z.ZodType<SandboxValue> = z.lazy(() =>
 );
 const PutSandboxBody = z.object({
   values: z.record(z.string(), SandboxLeaf),
+});
+
+const ApplyPresetBody = z.object({
+  preset: z.string().min(1).max(64).regex(/^[A-Za-z0-9_\-.]+$/),
+  /** Server name to write to. Defaults to the active server. */
+  serverName: z.string().min(1).max(64).optional(),
+  /** Pass true to clobber an existing SandboxVars.lua. */
+  overwrite: z.boolean().optional(),
 });
 
 function currentServerName(): string {
@@ -132,5 +141,52 @@ export async function registerConfigRoutes(app: FastifyInstance): Promise<void> 
     const merged: SandboxRecord = mergeSandbox(existing, parse.data.values as SandboxRecord);
     writeSandbox(path, merged);
     return { ok: true, path };
+  });
+
+  // -- Sandbox presets -----------------------------------------------------
+  // PZ ships difficulty preset Lua files under <install>/media/lua/shared/Sandbox/.
+  // Surfacing them lets the wizard write a complete SandboxVars.lua up-front,
+  // instead of forcing the user to boot the server once just to materialise it.
+  app.get('/api/config/sandbox/presets', async (_req, reply) => {
+    const cfg = loadConfig();
+    if (!cfg.pzInstallDir) {
+      reply.code(404);
+      return {
+        error: 'install_not_configured',
+        message: 'PZ install dir is not configured — finish the install wizard first.',
+      };
+    }
+    return { presets: listSandboxPresets(cfg.pzInstallDir).map((p) => p.name) };
+  });
+
+  app.post('/api/config/sandbox/apply-preset', async (req, reply) => {
+    const parse = ApplyPresetBody.safeParse(req.body);
+    if (!parse.success) {
+      reply.code(400);
+      return { error: 'invalid_body', issues: parse.error.issues };
+    }
+    const cfg = loadConfig();
+    if (!cfg.pzInstallDir) {
+      reply.code(404);
+      return {
+        error: 'install_not_configured',
+        message: 'PZ install dir is not configured — finish the install wizard first.',
+      };
+    }
+    const userDir = currentUserDir();
+    const serverName = parse.data.serverName ?? currentServerName();
+    try {
+      const result = applySandboxPreset({
+        installDir: cfg.pzInstallDir,
+        userDir,
+        serverName,
+        presetName: parse.data.preset,
+        overwrite: parse.data.overwrite,
+      });
+      return { ok: true, ...result, serverName };
+    } catch (err) {
+      reply.code(409);
+      return { error: 'apply_preset_failed', message: (err as Error).message };
+    }
   });
 }
