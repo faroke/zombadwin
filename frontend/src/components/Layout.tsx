@@ -1,5 +1,6 @@
 import { useQuery } from '@tanstack/react-query';
 import {
+  Activity,
   Archive,
   Cog,
   Download,
@@ -25,6 +26,7 @@ const navItems = [
   { to: '/', icon: LayoutDashboard, label: 'Dashboard', end: true },
   { to: '/wizard', icon: Sparkles, label: 'Setup wizard' },
   { to: '/console', icon: Terminal, label: 'Console' },
+  { to: '/monitoring', icon: Activity, label: 'Monitoring' },
   { to: '/servers', icon: ServerIcon, label: 'Profiles' },
   { to: '/install', icon: Download, label: 'Install' },
   { to: '/config', icon: Cog, label: 'Config' },

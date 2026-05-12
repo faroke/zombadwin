@@ -8,6 +8,7 @@ import { Dashboard } from '@/pages/Dashboard';
 import { Install } from '@/pages/Install';
 import { Login } from '@/pages/Login';
 import { Mods } from '@/pages/Mods';
+import { Monitoring } from '@/pages/Monitoring';
 import { Players } from '@/pages/Players';
 import { Saves } from '@/pages/Saves';
 import { Servers } from '@/pages/Servers';
@@ -30,6 +31,7 @@ export function App(): JSX.Element {
           <Route path="install" element={<Install />} />
           <Route path="config" element={<Config />} />
           <Route path="servers" element={<Servers />} />
+          <Route path="monitoring" element={<Monitoring />} />
           <Route path="players" element={<Players />} />
           <Route path="mods" element={<Mods />} />
           <Route path="saves" element={<Saves />} />
