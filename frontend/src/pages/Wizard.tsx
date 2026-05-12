@@ -93,7 +93,8 @@ export function Wizard(): JSX.Element {
       <Stepper currentIdx={stepIdx} />
 
       {step.id === 'build' && <BuildStep onDone={goNext} />}
-      {step.id !== 'build' && (
+      {step.id === 'difficulty' && <DifficultyStep onDone={goNext} />}
+      {step.id !== 'build' && step.id !== 'difficulty' && (
         <Card>
           <CardContent className="p-6">
             <p className="text-sm text-muted-foreground">
@@ -465,5 +466,148 @@ function stateLabel(s: InstallState): string {
   }
 }
 
-// Suppress unused-import warning while later steps are not yet wired in.
-void CheckCircle2;
+// -- Step 2: Difficulty ----------------------------------------------------
+
+interface PresetsResponse {
+  presets: string[];
+}
+interface ApplyPresetResponse {
+  ok: true;
+  path: string;
+  presetSource: string;
+  serverName: string;
+}
+
+function DifficultyStep({ onDone }: { onDone: () => void }): JSX.Element {
+  const presetsQuery = useQuery({
+    queryKey: ['sandbox-presets'],
+    queryFn: () => api<PresetsResponse>('/api/config/sandbox/presets'),
+  });
+  const [preset, setPreset] = useState<string>('');
+  const [confirmOverwrite, setConfirmOverwrite] = useState(false);
+  const [lastResult, setLastResult] = useState<ApplyPresetResponse | null>(null);
+
+  const apply = useMutation({
+    mutationFn: () =>
+      api<ApplyPresetResponse>('/api/config/sandbox/apply-preset', {
+        method: 'POST',
+        body: JSON.stringify({ preset, overwrite: confirmOverwrite }),
+      }),
+    onSuccess: (data) => setLastResult(data),
+  });
+
+  const needsOverwriteConfirm =
+    apply.error instanceof Error &&
+    /refusing to overwrite/i.test(apiErrorMessage(apply.error));
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Difficulty preset</CardTitle>
+        <CardDescription>
+          Drops a complete <code>&lt;server&gt;_SandboxVars.lua</code> from one of the PZ-bundled
+          presets. Skips the "boot the server once just to generate the file" detour — you can
+          fine-tune in the Config page afterwards.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {presetsQuery.error ? (
+          <p className="text-xs text-destructive">
+            {apiErrorMessage(presetsQuery.error, 'Presets unavailable')} — Build step must
+            complete first so the install dir is known.
+          </p>
+        ) : presetsQuery.isLoading ? (
+          <p className="text-xs text-muted-foreground">Loading preset list…</p>
+        ) : (
+          <div className="grid gap-2 sm:grid-cols-2">
+            {presetsQuery.data?.presets.map((p) => (
+              <button
+                key={p}
+                type="button"
+                onClick={() => {
+                  setPreset(p);
+                  setConfirmOverwrite(false);
+                }}
+                className={cn(
+                  'rounded-md border px-3 py-2 text-left text-sm transition-colors',
+                  preset === p
+                    ? 'border-primary bg-primary/10 text-foreground'
+                    : 'border-input hover:bg-accent/50',
+                )}
+              >
+                <span className="font-semibold">{p}</span>
+                <span className="ml-1 text-xs text-muted-foreground">{presetBlurb(p)}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            onClick={() => apply.mutate()}
+            disabled={!preset || apply.isPending}
+          >
+            {apply.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Applying…
+              </>
+            ) : (
+              <>Apply {preset || 'preset'}</>
+            )}
+          </Button>
+          {needsOverwriteConfirm && !confirmOverwrite && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                setConfirmOverwrite(true);
+                apply.reset();
+              }}
+            >
+              Overwrite existing
+            </Button>
+          )}
+          {lastResult && (
+            <Button variant="default" onClick={onDone}>
+              Continue <ChevronRight className="ml-1 h-4 w-4" />
+            </Button>
+          )}
+        </div>
+
+        {apply.error && (
+          <p className="text-xs text-destructive">{apiErrorMessage(apply.error)}</p>
+        )}
+        {lastResult && (
+          <p className="inline-flex items-center text-xs text-primary">
+            <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+            Wrote <code className="px-1">{lastResult.path}</code> from preset
+            <code className="ml-1 px-1">{preset}</code> for server
+            <code className="ml-1 px-1">{lastResult.serverName}</code>.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function presetBlurb(name: string): string {
+  // PZ ships these without metadata — short blurbs come from the community wiki
+  // (paraphrased) to give the user a steer at-a-glance.
+  switch (name) {
+    case 'Apocalypse':
+      return '— canonical "hard but fair" preset, sprinters off';
+    case 'Survivor':
+      return '— stealth-focused, scarce loot';
+    case 'Builder':
+      return '— peaceful, base-building emphasis';
+    case 'Outbreak':
+      return '— sprinters, day-zero scenario';
+    case 'Rising':
+      return '— escalating zombie speed/population';
+    case 'SixMonthsLater':
+      return '— late-game world, depleted infrastructure';
+    case 'Extinction':
+      return '— extreme density, sprinter horde';
+    default:
+      return '';
+  }
+}
