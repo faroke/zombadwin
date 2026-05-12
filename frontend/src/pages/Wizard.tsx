@@ -95,15 +95,8 @@ export function Wizard(): JSX.Element {
       {step.id === 'build' && <BuildStep onDone={goNext} />}
       {step.id === 'difficulty' && <DifficultyStep onDone={goNext} />}
       {step.id === 'mods' && <ModsStep onDone={goNext} />}
-      {step.id !== 'build' && step.id !== 'difficulty' && step.id !== 'mods' && (
-        <Card>
-          <CardContent className="p-6">
-            <p className="text-sm text-muted-foreground">
-              Step "{step.label}" not implemented yet — coming next in this milestone.
-            </p>
-          </CardContent>
-        </Card>
-      )}
+      {step.id === 'network' && <NetworkStep onDone={goNext} />}
+      {step.id === 'recap' && <RecapStep />}
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={goPrev} disabled={stepIdx === 0}>
@@ -908,6 +901,303 @@ function DownloadSummary({ result }: { result: DownloadResponse }): JSX.Element 
           )}
         </ul>
       )}
+    </div>
+  );
+}
+
+// -- Step 4: Network --------------------------------------------------------
+
+interface IniResponse {
+  path: string;
+  serverName: string;
+  values: Record<string, string>;
+  order: string[];
+  // schema/categories are present too but not used here.
+}
+
+// The subset of INI keys the wizard's Network step surfaces. The full editor
+// lives in /config — this step only exposes the fields a brand-new server
+// owner has to set to make the box reachable.
+const NETWORK_FIELDS: Array<{ key: string; label: string; placeholder?: string; hint?: string }> = [
+  {
+    key: 'PublicName',
+    label: 'Public name',
+    placeholder: 'My PZ Server',
+    hint: 'Shown in the in-game server browser when Public is on.',
+  },
+  {
+    key: 'Password',
+    label: 'Password',
+    placeholder: '(leave blank for open)',
+    hint: 'Leave empty if Open is true; otherwise required to join.',
+  },
+  {
+    key: 'MaxPlayers',
+    label: 'Max players',
+    placeholder: '32',
+    hint: 'Above 32 risks map desync — PZ warns about it.',
+  },
+  {
+    key: 'DefaultPort',
+    label: 'Default port (UDP)',
+    placeholder: '16261',
+    hint: 'Main joiner port. Must be reachable / port-forwarded for non-LAN.',
+  },
+  {
+    key: 'UDPPort',
+    label: 'Secondary port (UDP)',
+    placeholder: '16262',
+  },
+  { key: 'RCONPort', label: 'RCON port (TCP)', placeholder: '27015' },
+  { key: 'RCONPassword', label: 'RCON password' },
+  {
+    key: 'Public',
+    label: 'List in in-game browser (true/false)',
+    placeholder: 'false',
+  },
+  {
+    key: 'Open',
+    label: 'Allow unregistered accounts (true/false)',
+    placeholder: 'true',
+  },
+];
+
+function NetworkStep({ onDone }: { onDone: () => void }): JSX.Element {
+  const qc = useQueryClient();
+  const ini = useQuery({
+    queryKey: ['ini'],
+    queryFn: () => api<IniResponse>('/api/config/ini'),
+    retry: false,
+  });
+  const [edits, setEdits] = useState<Record<string, string>>({});
+  const [saved, setSaved] = useState(false);
+
+  const save = useMutation({
+    mutationFn: () =>
+      api('/api/config/ini', {
+        method: 'PUT',
+        body: JSON.stringify({ values: edits }),
+      }),
+    onSuccess: () => {
+      setSaved(true);
+      void qc.invalidateQueries({ queryKey: ['ini'] });
+    },
+  });
+
+  if (ini.isLoading) {
+    return (
+      <Card>
+        <CardContent className="p-6 text-sm text-muted-foreground">Loading INI…</CardContent>
+      </Card>
+    );
+  }
+  if (ini.error) {
+    return (
+      <Card>
+        <CardContent className="p-6">
+          <p className="text-sm text-destructive">
+            {apiErrorMessage(ini.error, 'INI not available')}
+          </p>
+          <p className="mt-2 text-xs text-muted-foreground">
+            The active server's INI is only generated after the first boot. Skip Network and let
+            PZ create defaults — you can come back and edit in the Config page.
+          </p>
+          <Button variant="outline" className="mt-3" onClick={onDone}>
+            Skip <ChevronRight className="ml-1 h-4 w-4" />
+          </Button>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const values = ini.data?.values ?? {};
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Network</CardTitle>
+        <CardDescription>
+          Sets the handful of INI fields that matter for reachability. Everything else is left at
+          the defaults — visit Config for the long tail.
+          {ini.data?.serverName && (
+            <>
+              {' '}
+              Editing <code className="px-1">{ini.data.serverName}.ini</code>.
+            </>
+          )}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {NETWORK_FIELDS.map((f) => (
+          <div key={f.key} className="space-y-1">
+            <label className="text-xs font-medium text-muted-foreground">
+              {f.label} <code className="ml-1 text-[10px]">{f.key}</code>
+            </label>
+            <Input
+              type={f.key === 'Password' || f.key === 'RCONPassword' ? 'password' : 'text'}
+              value={edits[f.key] ?? values[f.key] ?? ''}
+              onChange={(e) => {
+                setSaved(false);
+                setEdits((s) => ({ ...s, [f.key]: e.target.value }));
+              }}
+              placeholder={f.placeholder ?? ''}
+              className="font-mono"
+            />
+            {f.hint && <p className="text-[10px] text-muted-foreground">{f.hint}</p>}
+          </div>
+        ))}
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <Button
+            onClick={() => save.mutate()}
+            disabled={Object.keys(edits).length === 0 || save.isPending}
+          >
+            {save.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Saving…
+              </>
+            ) : (
+              'Save changes'
+            )}
+          </Button>
+          <Button variant="outline" onClick={onDone}>
+            {saved ? 'Continue' : 'Skip'} <ChevronRight className="ml-1 h-4 w-4" />
+          </Button>
+          {saved && (
+            <span className="inline-flex items-center text-xs text-primary">
+              <CheckCircle2 className="mr-1 h-3.5 w-3.5" /> INI saved.
+            </span>
+          )}
+        </div>
+        {save.error && (
+          <p className="text-xs text-destructive">{apiErrorMessage(save.error)}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+// -- Step 5: Recap ----------------------------------------------------------
+
+interface ServerStatus {
+  state: string;
+  pid: number | null;
+  installDir: string | null;
+}
+
+function RecapStep(): JSX.Element {
+  const installStatus = useQuery({
+    queryKey: ['install-status'],
+    queryFn: () => api<InstallStatus>('/api/install/status'),
+  });
+  const ini = useQuery({
+    queryKey: ['ini'],
+    queryFn: () => api<IniResponse>('/api/config/ini'),
+    retry: false,
+  });
+  const mods = useQuery({
+    queryKey: ['mods'],
+    queryFn: () => api<ModsResponse>('/api/mods'),
+    retry: false,
+  });
+  const status = useQuery({
+    queryKey: ['server-status'],
+    queryFn: () => api<ServerStatus>('/api/server/status'),
+    refetchInterval: 2000,
+  });
+
+  const start = useMutation({
+    mutationFn: () => api('/api/server/start', { method: 'POST' }),
+  });
+
+  const running = status.data && /running|starting|alive/i.test(status.data.state);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-base">Recap &amp; start</CardTitle>
+        <CardDescription>
+          One last look before the JVM boots. Everything below comes from the same endpoints the
+          rest of the UI uses, so it stays truthful even after manual edits in Config.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3 text-sm">
+        <RecapRow
+          label="Install"
+          value={
+            installStatus.data?.targetDir
+              ? `${installStatus.data.targetDir} (branch: ${
+                  installStatus.data.branch || 'public / default'
+                })`
+              : '— not installed'
+          }
+        />
+        <RecapRow
+          label="Profile"
+          value={ini.data?.serverName ? ini.data.serverName : '— no INI yet'}
+        />
+        <RecapRow
+          label="Network"
+          value={
+            ini.data
+              ? `${ini.data.values.PublicName ?? 'My PZ Server'} on ${
+                  ini.data.values.DefaultPort ?? '16261'
+                }/${ini.data.values.UDPPort ?? '16262'}${
+                  ini.data.values.Password ? ' (password set)' : ''
+                }`
+              : '—'
+          }
+        />
+        <RecapRow
+          label="Mods"
+          value={
+            mods.data
+              ? `${mods.data.workshopItems.length} workshop items · ${mods.data.mods.length} mod IDs · ${mods.data.map.length} map entries`
+              : '— none'
+          }
+        />
+        <RecapRow
+          label="Server"
+          value={status.data ? `${status.data.state}${status.data.pid ? ` (pid ${status.data.pid})` : ''}` : '—'}
+        />
+
+        <div className="flex flex-wrap items-center gap-2 pt-2">
+          <Button
+            onClick={() => start.mutate()}
+            disabled={start.isPending || !!running}
+          >
+            {start.isPending ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" /> Starting…
+              </>
+            ) : running ? (
+              'Server already running'
+            ) : (
+              'Start server'
+            )}
+          </Button>
+        </div>
+        {start.error && (
+          <p className="text-xs text-destructive">{apiErrorMessage(start.error)}</p>
+        )}
+        {running && (
+          <p className="inline-flex items-center text-xs text-primary">
+            <CheckCircle2 className="mr-1 h-3.5 w-3.5" />
+            Up — head to the Console page for live logs.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
+function RecapRow({ label, value }: { label: string; value: string }): JSX.Element {
+  return (
+    <div className="flex items-baseline gap-3 border-b border-border/40 pb-2 last:border-0">
+      <span className="w-20 shrink-0 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        {label}
+      </span>
+      <span className="font-mono text-xs">{value}</span>
     </div>
   );
 }
