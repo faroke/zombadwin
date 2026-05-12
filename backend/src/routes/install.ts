@@ -3,6 +3,7 @@ import { homedir, platform } from 'node:os';
 import { join } from 'node:path';
 import { z } from 'zod';
 import { loadConfig } from '../config.js';
+import { listSteamBranches } from '../services/steamBranches.js';
 import { getInstallService } from '../services/steamcmd.js';
 
 const StartBody = z.object({
@@ -52,4 +53,17 @@ export async function registerInstallRoutes(app: FastifyInstance): Promise<void>
   });
 
   app.post('/api/install/cancel', async () => getInstallService().cancel());
+
+  // Surfaces the live Steam beta-branch list so the UI can build a dropdown
+  // instead of carrying a hardcoded preset that rots when Indie Stone renames
+  // a branch (e.g. b42unstable → unstable when B42 went stable).
+  app.get('/api/install/branches', async (req, reply) => {
+    const force = (req.query as { force?: string }).force === '1';
+    try {
+      return await listSteamBranches({ force });
+    } catch (err) {
+      reply.code(502);
+      return { error: 'branches_fetch_failed', message: (err as Error).message };
+    }
+  });
 }
